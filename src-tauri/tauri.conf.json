@@ -56,9 +56,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwMEI4RENDQjlBNDA2RTIKUldUaUJxUzV6STBMTUNPQ1Y3cGZxSW9YNTRGRCtMZWVWTE5JN2d0eDNvZFlrLzhXMGxNSFlmMW4K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDQ0IxMURERURCNzg5NEUKUldST2liZnQzUkhML0FrT05hVU1Db3RoakFNb3lJdjVuRURHTDROdEEvZTdDS3pFNWdocnRDRWcK",
       "endpoints": [
-        "https://github.com/137-Trimethylxanthin/releases/releases/download/verity-updater/latest.json"
+        "https://github.com/137-Trimethylxanthin/buddity/releases/download/verity-updater/latest.json"
       ]
     }
   }

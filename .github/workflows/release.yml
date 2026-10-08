@@ -1,15 +1,13 @@
 # Builds Verity for Windows, Linux and macOS when a version tag (v1.2.3) is
-# pushed, and publishes the installers as release "verity-v1.2.3" in the
-# public, shared "releases" repo. Because that repo holds releases of several
-# projects, the app can't use "latest"; it reads latest.json from the fixed
-# "verity-updater" release, which the last job refreshes.
+# pushed, and publishes the installers as release "verity-v1.2.3" in this repo.
+# The app reads latest.json from the fixed "verity-updater" release, which the
+# last job refreshes.
 #
-# Actions are pinned to commits: they run with the signing key and releases token.
+# Actions are pinned to commits: they run with the signing key.
 #
 # Repo secrets needed:
-#   TAURI_SIGNING_PRIVATE_KEY            contents of ~/.tauri/verity.key
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   contents of ~/.tauri/verity.key.password
-#   RELEASES_TOKEN                       fine-grained token with Contents: read & write on the releases repo
+#   TAURI_SIGNING_PRIVATE_KEY            contents of ~/.tauri/buddity.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   contents of ~/.tauri/buddity.key.password
 
 name: Release
 
@@ -18,21 +16,23 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  # Create the release once, up front. It must point at a commit in the
-  # releases repo (its main branch), not at this repo's commit.
+  # Create the release once, up front, so the parallel builds don't race to create it.
   release:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-      REPO: 137-Trimethylxanthin/releases
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Create verity-vX.Y.Z in the releases repo
+      - name: Create verity-vX.Y.Z
         run: |
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
           gh release view "verity-v$VERSION" -R "$REPO" >/dev/null 2>&1 || gh release create "verity-v$VERSION" -R "$REPO" \
-            --target main --title "Verity v$VERSION" \
+            --target "$GITHUB_SHA" --title "Verity v$VERSION" \
             --notes "Download the installer for your system below. Already installed? Verity updates himself."
 
   build:
@@ -71,12 +71,10 @@ jobs:
 
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          owner: 137-Trimethylxanthin
-          repo: releases
           tagName: verity-v__VERSION__
           releaseName: Verity v__VERSION__
           releaseDraft: false
@@ -87,8 +85,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-      REPO: 137-Trimethylxanthin/releases
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Point the updater at this version

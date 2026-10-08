@@ -1,6 +1,6 @@
 [package]
 name = "verity"
-version = "0.2.0"
+version = "0.2.1"
 description = "Verity - an unofficial fan-made desktop assistant"
 edition = "2021"
 

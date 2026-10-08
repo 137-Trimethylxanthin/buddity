@@ -58,7 +58,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwMEI4RENDQjlBNDA2RTIKUldUaUJxUzV6STBMTUNPQ1Y3cGZxSW9YNTRGRCtMZWVWTE5JN2d0eDNvZFlrLzhXMGxNSFlmMW4K",
       "endpoints": [
-        "https://github.com/137-Trimethylxanthin/verity-releases/releases/latest/download/latest.json"
+        "https://github.com/137-Trimethylxanthin/releases/releases/download/verity-updater/latest.json"
       ]
     }
   }

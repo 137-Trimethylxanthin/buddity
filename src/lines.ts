@@ -98,7 +98,7 @@ function duration(secs: number): string {
   return `${mins} minute${mins === 1 ? "" : "s"}`;
 }
 
-function render(line: string, ctx: Context): string {
+export function render(line: string, ctx: Context): string {
   return line
     .replaceAll("{name}", ctx.skin.name)
     .replaceAll("{user}", ctx.user)

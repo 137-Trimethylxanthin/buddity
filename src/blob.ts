@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { BALL_FILL, type Body, type Look, type Motion } from "./face";
 import { FaceTextures } from "./ball";
 import type { Skin } from "./skins";
+import type { Slot } from "./wardrobe";
 
 // Obesity: a fat yellow blob. A sphere reshaped into a dumpling: wider at the
 // bottom, a chin roll and a belly roll, the belly pushing out at the front with
@@ -62,6 +63,7 @@ function blobGeometry(): THREE.BufferGeometry {
 export class BlobBody implements Body {
   readonly object = new THREE.Group();
   readonly halfExtents: [number, number];
+  readonly anchors: Record<Slot, THREE.Object3D>;
 
   private readonly pose = new THREE.Group();
   private readonly arms: THREE.Group[] = [];
@@ -75,6 +77,8 @@ export class BlobBody implements Body {
   private time = 0;
   private phase = 0;
   private spin = 0;
+  private rock = 0; // forward/back lean while he "rolls" on the spot (he can't roll)
+  private rockPhase = 0;
 
   constructor(
     skin: Skin,
@@ -122,6 +126,17 @@ export class BlobBody implements Body {
       shaped.add(arm);
     }
 
+    // He doesn't roll, so everything he wears sits on the shaped body. His dot
+    // eyes are smaller and higher than Verity's, so face items shrink and move up.
+    const face = new THREE.Group();
+    face.position.set(0, 0.34, 0.2);
+    face.scale.setScalar(0.72);
+    const neck = new THREE.Group(); // in the chin roll, under his mouth
+    neck.position.set(0, 0.1, 1.0);
+    neck.scale.setScalar(0.7);
+    neck.rotation.x = -0.15;
+    shaped.add(face, neck);
+    this.anchors = { head: shaped, face, neck };
     this.pose.add(shaped);
     this.object.add(this.pose);
   }
@@ -159,7 +174,14 @@ export class BlobBody implements Body {
     // Face the cursor a little when not busy.
     this.euler.setFromQuaternion(look);
     const attentive = !moving && !falling ? 0.35 : 0;
-    this.pose.rotation.set(this.euler.x * attentive, this.euler.y * attentive, this.spin + sway);
+    // Asked to roll on the spot: he rocks towards you and back instead, leaning the way he's going.
+    if (m.spin) {
+      this.rockPhase += Math.abs(m.spin) / STEP_PX;
+      this.rock = Math.sign(m.spin) * (0.15 + 0.2 * Math.abs(Math.sin(this.rockPhase)));
+    } else {
+      this.rock *= Math.exp(-dt * 6);
+    }
+    this.pose.rotation.set(this.euler.x * attentive + this.rock, this.euler.y * attentive, this.spin + sway);
 
     this.arms.forEach((arm, i) => {
       const side = i === 0 ? -1 : 1;

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { Body, Look, Motion } from "./face";
 import type { Skin } from "./skins";
+import type { Slot } from "./wardrobe";
 
 // The classic Verity: a ball. His flat face (the public-domain vector, 154×154
 // viewBox) is projected onto a sphere texture, so seen head-on he looks exactly
@@ -373,6 +374,7 @@ const X_AXIS = new THREE.Vector3(1, 0, 0);
 export class BallBody implements Body {
   readonly object = new THREE.Group(); // skin proportions
   readonly halfExtents: [number, number];
+  readonly anchors: Record<Slot, THREE.Object3D>;
   private readonly ball: THREE.Mesh;
   private readonly material: THREE.MeshStandardMaterial;
   private readonly textures = new FaceTextures();
@@ -388,6 +390,12 @@ export class BallBody implements Body {
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), this.material);
     this.object.scale.set(sx, sy, (sx + sy) / 2);
     this.object.add(this.ball);
+    // Everything he wears is stuck to the ball and rolls with it.
+    const neck = new THREE.Group(); // under his smile, on the front of the ball
+    neck.position.set(0, -0.72, 0.72);
+    neck.rotation.x = -0.75;
+    this.ball.add(neck);
+    this.anchors = { head: this.ball, face: this.ball, neck };
   }
 
   setLook(l: Look): void {
@@ -395,9 +403,14 @@ export class BallBody implements Body {
     this.material.needsUpdate = true;
   }
 
-  /** Rolls while moving; otherwise turns to face where it's looking. */
+  /** Rolls while moving or spinning on the spot; otherwise turns to face where it's looking. */
   update(dt: number, m: Motion, look: THREE.Quaternion): void {
     const radiusPx = this.ppu * this.skin.shape[0];
+    if (m.spin) {
+      this.step.setFromAxisAngle(X_AXIS, m.spin / radiusPx);
+      this.ball.quaternion.premultiply(this.step);
+      return;
+    }
     if (m.state === "walk" || m.state === "fall" || m.state === "exercise") {
       this.step.setFromAxisAngle(Z_AXIS, -m.dx / radiusPx);
       this.ball.quaternion.premultiply(this.step);

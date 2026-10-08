@@ -1,6 +1,6 @@
 import { Buddy, type Side, type State } from "./buddy";
-import { Face, type Mouth, type Press } from "./face";
-import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pick, quiz, randomLine, type Context, type Mood, type Stats } from "./lines";
+import { BALL_FILL, Face, type Mouth, type Press } from "./face";
+import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pick, quiz, randomLine, render, type Context, type Mood, type Stats } from "./lines";
 import { ContextMenu, type MenuItem } from "./menu";
 import {
   cursorTo,
@@ -12,6 +12,7 @@ import {
   onFakeQuit,
   onSetting,
   onTray,
+  onWardrobe,
   openSettings,
   scrollActive,
   setHitRegions,
@@ -22,9 +23,10 @@ import { Prop, spawnFood, spawnPuke, Treadmill } from "./props";
 import { isSkinId, SKIN_IDS, SKINS, type Skin } from "./skins";
 import { BEAT_S, snippets, vowelOf } from "./song";
 import { Speech } from "./speech";
-import { load, save, saveSetting, setting } from "./store";
+import { load, loadWardrobe, save, saveSetting, setting } from "./store";
 import { autostartState, findUpdate, installUpdate, setAutostart } from "./updates";
 import { Voice } from "./voice";
+import { accessory, parseWorn, wornHeight, type AccessoryId } from "./wardrobe";
 
 const SIZE = 160;
 const DRAG_THRESHOLD = 4;
@@ -104,6 +106,8 @@ const voice = new Voice();
 if (load("sound") === null && load("muted") === "1") saveSetting("sound", false);
 voice.muted = !setting("sound");
 const face = new Face(faceEl, SIZE, skin);
+let worn = loadWardrobe();
+face.setWardrobe(worn);
 const buddy = new Buddy(SIZE * skin.shape[0], SIZE * skin.shape[1], onStateChange, onImpact);
 const speech = new Speech(bubbleEl, {
   onTalking: (on) => {
@@ -859,8 +863,9 @@ function placeBubble(): void {
   const h = bubbleEl.offsetHeight;
   const mid = buddy.x + buddy.w / 2;
   const left = Math.max(8, Math.min(innerWidth - w - 8, mid - w / 2));
-  // Above his head, unless he's near the top of the screen.
-  const above = buddy.y - h - BUBBLE_GAP;
+  // Above his head (and his hat), unless he's near the top of the screen.
+  const hat = wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2);
+  const above = buddy.y - hat - h - BUBBLE_GAP;
   const top = above > 8 ? above : buddy.y + buddy.h + BUBBLE_GAP;
   bubbleEl.style.transform = `translate(${left}px, ${top}px)`;
   bubbleEl.style.setProperty("--tail", `${Math.max(20, Math.min(w - 20, mid - left))}px`);
@@ -911,12 +916,10 @@ function frame(now: number): void {
     dx = TREADMILL_SPEED * dt; // running on the spot
     vx = TREADMILL_SPEED;
     vy = 0;
-  } else if (now < rollUntil && buddy.state === "idle") {
-    dx = rollDir * ROLL_SPEED * dt; // spinning on the spot while scrolling
-    vx = rollDir * ROLL_SPEED;
-    vy = 0;
   }
-  face.update(dt, { dx, dy: buddy.y - y0, vx, vy, state: buddy.state });
+  // Rolling on the spot while scrolling: towards you for down, away for up.
+  const spin = now < rollUntil && buddy.state === "idle" ? rollDir * ROLL_SPEED * dt : 0;
+  face.update(dt, { dx, dy: buddy.y - y0, vx, vy, state: buddy.state, spin });
   const scare = jumpscare(now);
   if (scare) {
     // Pulled to the middle of the screen as he grows, shaking.
@@ -1070,10 +1073,23 @@ function openMenu(x: number, y: number): void {
           say(greet(mood, ctx));
         },
       },
+      { label: "👒 Wardrobe", action: openSettings },
       { label: "⚙ Settings", action: openSettings },
     ],
   ]);
 }
+
+/** Dressed from the wardrobe: he shows off whatever he just put on. */
+function dress(next: AccessoryId[]): void {
+  const added = next.find((id) => !worn.includes(id));
+  worn = next;
+  face.setWardrobe(next);
+  if (added) {
+    face.giggle();
+    say(render(accessory(added)!.line, ctx));
+  }
+}
+onWardrobe(dress);
 
 // Changes made in the settings window. Autostart is applied there; the
 // jumpscare setting is read when it's needed.
@@ -1146,6 +1162,9 @@ async function start(): Promise<void> {
     const params = new URLSearchParams(location.search);
     const previewSkin = params.get("skin");
     if (previewSkin && isSkinId(previewSkin)) applySkin(SKINS[previewSkin]);
+    // e.g. ?wear=master,shades
+    const wear = params.get("wear");
+    if (wear) dress(parseWorn(JSON.stringify(wear.split(","))));
     // e.g. ?do=food,food,treadmill — queue actions one second apart.
     const demo: Record<string, () => void> = {
       food: dropFood,
@@ -1156,6 +1175,7 @@ async function start(): Promise<void> {
       pester: () => (lastNoticed = -Infinity),
       pet,
       scroll: () => scrollRoll(5),
+      scrollup: () => scrollRoll(-5),
       fakequit: () => {
         vanish();
         window.setTimeout(crashOut, 3000);

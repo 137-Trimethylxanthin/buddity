@@ -1,5 +1,6 @@
 // Preferences saved in localStorage, shared by the character and settings windows.
 // Storage can be unavailable, so every access is guarded.
+import { parseWorn, type AccessoryId } from "./wardrobe";
 
 export function load(key: string): string | null {
   try {
@@ -26,4 +27,13 @@ export function setting(key: Setting): boolean {
 
 export function saveSetting(key: Setting, on: boolean): void {
   save(key, on ? "1" : "0");
+}
+
+/** What he's wearing: accessory ids, saved as JSON. */
+export function loadWardrobe(): AccessoryId[] {
+  return parseWorn(load("wardrobe"));
+}
+
+export function saveWardrobe(worn: AccessoryId[]): void {
+  save("wardrobe", JSON.stringify(worn));
 }

@@ -5,6 +5,8 @@ import { BlobBody } from "./blob";
 import type { Side, State } from "./buddy";
 import type { Mood } from "./lines";
 import type { Skin } from "./skins";
+import { buildAccessory, disposeAccessory } from "./accessories";
+import { accessory, type AccessoryId, type Slot } from "./wardrobe";
 
 // The 3D character: scene, lights, a squash-and-stretch spring shared by every
 // body, and the expression state (eyes, mouth, mood). The body itself — the
@@ -27,12 +29,16 @@ export interface Motion {
   vx: number;
   vy: number;
   state: State;
+  /** Px rolled on the spot this frame: positive rolls him towards you, negative away. */
+  spin?: number;
 }
 
 export interface Body {
   readonly object: THREE.Object3D;
   /** Half width and height in world units, for keeping the squashed side on the surface. */
   readonly halfExtents: [number, number];
+  /** Where accessories go, per wardrobe slot. */
+  readonly anchors: Record<Slot, THREE.Object3D>;
   setLook(l: Look): void;
   /** Multiply the body colour (e.g. green when sick); null restores it. */
   setTint(color: THREE.Color | null): void;
@@ -105,6 +111,7 @@ export class Face {
   private press: Press | null = null;
   private readonly mold = new Mold();
   private push: [number, number] | null = null; // px pushed into the screen edges (x right, y down)
+  private readonly worn = new Map<AccessoryId, THREE.Object3D>();
 
   constructor(
     private readonly el: HTMLElement,
@@ -153,6 +160,7 @@ export class Face {
     this.camera.updateProjectionMatrix();
 
     if (this.body) {
+      for (const obj of this.worn.values()) obj.removeFromParent(); // keep them for the new body
       this.unrotate.remove(this.body.object);
       this.body.dispose();
     }
@@ -161,7 +169,28 @@ export class Face {
       if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
     });
     this.unrotate.add(this.body.object);
+    for (const [id, obj] of this.worn) this.body.anchors[accessory(id)!.slot].add(obj); // dress the new body
     this.refresh();
+  }
+
+  /** Put on exactly these accessories (one per slot, see wardrobe.ts). */
+  setWardrobe(ids: AccessoryId[]): void {
+    for (const [id, obj] of this.worn) {
+      if (ids.includes(id)) continue;
+      obj.removeFromParent();
+      disposeAccessory(obj);
+      this.worn.delete(id);
+    }
+    for (const id of ids) {
+      if (this.worn.has(id)) continue;
+      const obj = buildAccessory(id);
+      // Molds into walls with him, so a hat doesn't poke through the ceiling.
+      obj.traverse((o) => {
+        if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
+      });
+      this.worn.set(id, obj);
+      this.body.anchors[accessory(id)!.slot].add(obj);
+    }
   }
 
   private refresh(): void {

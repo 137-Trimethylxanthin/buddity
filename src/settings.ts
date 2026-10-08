@@ -1,10 +1,33 @@
 // The settings window: checkboxes saved to shared storage; the character
 // window is told about each change so it applies right away.
-import { sendSetting } from "./native";
-import { load, saveSetting, setting, type Setting } from "./store";
+import { sendSetting, sendWardrobe } from "./native";
+import { load, loadWardrobe, saveSetting, saveWardrobe, setting, type Setting } from "./store";
+import { ACCESSORIES, toggleWorn } from "./wardrobe";
 import { getVersion } from "@tauri-apps/api/app";
 import { findUpdate, installUpdate, setAutostart } from "./updates";
 import { inTauri } from "./native";
+
+// The wardrobe: a button per accessory; wearing one takes off the other in its slot.
+let worn = loadWardrobe();
+const wardrobe = document.getElementById("wardrobe")!;
+const tiles = ACCESSORIES.map((a) => {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.title = a.name;
+  tile.innerHTML = `<span>${a.icon}</span>${a.name}`;
+  tile.addEventListener("click", () => {
+    worn = toggleWorn(worn, a.id);
+    saveWardrobe(worn);
+    sendWardrobe(worn);
+    showWorn();
+  });
+  wardrobe.append(tile);
+  return { tile, id: a.id };
+});
+function showWorn(): void {
+  for (const { tile, id } of tiles) tile.setAttribute("aria-pressed", String(worn.includes(id)));
+}
+showWorn();
 
 // Check for updates by hand; if there is one it's installed right away and he restarts.
 const updateBtn = document.getElementById("check-update") as HTMLButtonElement;

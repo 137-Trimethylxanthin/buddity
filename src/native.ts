@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { Setting } from "./store";
+import type { AccessoryId } from "./wardrobe";
 
 export const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -68,4 +69,13 @@ export function sendSetting(key: Setting, on: boolean): void {
 
 export function onSetting(cb: (key: Setting, on: boolean) => void): void {
   if (inTauri) void listen<{ key: Setting; on: boolean }>("setting", (e) => cb(e.payload.key, e.payload.on));
+}
+
+/** The wardrobe (in the settings window) tells the character window what he's wearing now. */
+export function sendWardrobe(worn: AccessoryId[]): void {
+  if (inTauri) void emit("wardrobe", worn);
+}
+
+export function onWardrobe(cb: (worn: AccessoryId[]) => void): void {
+  if (inTauri) void listen<AccessoryId[]>("wardrobe", (e) => cb(e.payload));
 }

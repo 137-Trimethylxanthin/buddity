@@ -76,11 +76,45 @@
         display: block;
         color: var(--muted);
       }
+      h2 {
+        margin: 18px 0 4px;
+        font-size: 15px;
+      }
+      .wardrobe {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin: 8px 0 18px;
+      }
+      .wardrobe button {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--fg);
+        font-size: 11px;
+        line-height: 1.2;
+      }
+      .wardrobe button span {
+        font-size: 24px;
+        line-height: 1.1;
+      }
+      .wardrobe button[aria-pressed="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #2b2410;
+      }
     </style>
     <script type="module" src="/src/settings.ts"></script>
   </head>
   <body>
     <h1>Verity settings 💛</h1>
+    <h2>Wardrobe</h2>
+    <small>One hat, one pair of glasses and one neck thing at a time.</small>
+    <div class="wardrobe" id="wardrobe"></div>
     <label><input type="checkbox" data-key="sound" /><span>Sound<small>His voice, songs and noises.</small></span></label>
     <label><input type="checkbox" data-key="pester" /><span>Pester<small>Ignore him for 5 minutes and he pushes your cursor around and scrolls your page.</small></span></label>
     <label><input type="checkbox" data-key="autostart" /><span>Start with PC<small>He starts when you log in.</small></span></label>

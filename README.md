@@ -19,10 +19,11 @@ Runs on **Windows, Linux and macOS**. Download the newest `verity-v…` release 
 
 - **Food:** feed normal Verity 3 pieces and he turns into Obesity. The **treadmill** slims him back down.
 - **Skins:** Verity, Falsity, Lovity, Obesity, Freakity, Goonity.
+- **Wardrobe:** middle-click → 👒 Wardrobe (it's at the top of Settings): the Master Verity hat, a bow, a crown, a party hat, devil horns, a halo, sunglasses and a bow tie. One hat, one pair of glasses and one neck thing at a time; he keeps them on when you switch skins.
 - **Evil mode:** right-click → 😈. Also switches on by itself between midnight and 4 a.m.
 - **Pester:** ignore him for 5 minutes and he pushes your cursor across the screen (shake your mouse hard to break free) and rolls on the spot to scroll your page. You can turn this off in Settings.
 - **He knows things:** in evil mode he brings up how long your PC has been on, what day it is, and how often you've clicked, thrown, fed or closed him. All of it stays on your computer.
-- **Don't close him:** sometimes (2%) Quit only pretends. He disappears, tray icon too, and about half an hour later he crashes out: grabs your cursor, jumpscares you, and pushes your cursor around for 30 seconds before calming down. Starting him again while he's gone brings him back right away.
+- **Don't close him:** sometimes (2%) Quit only pretends. He disappears, tray icon too, and a minute later he crashes out: grabs your cursor, jumpscares you, and pushes your cursor around for 30 seconds before calming down. Starting him again while he's gone brings him back right away.
 - **Settings:** middle-click → ⚙, or the tray icon → Settings…: sound, pester, start with PC, Discord status (and one more, once you've earned it), plus a "Check for updates" button. Click "Later" on an update and he won't ask again until he restarts.
 - **Discord:** while he runs, your Discord profile shows you're hanging out with Verity, and his mood.
 

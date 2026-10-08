@@ -55,8 +55,8 @@ fn get_uptime() -> Option<u64> {
 
 /// Chance that Quit in the tray only pretends to quit.
 const FAKE_QUIT_CHANCE: f64 = 0.02;
-/// He comes back somewhere between these many minutes later.
-const FAKE_QUIT_MINUTES: (u64, u64) = (25, 35);
+/// He comes back this many seconds later.
+const FAKE_QUIT_SECS: u64 = 60;
 
 /// Set while Verity is pretending to have quit.
 static AWAY: AtomicBool = AtomicBool::new(false);
@@ -73,7 +73,7 @@ fn roll() -> f64 {
 }
 
 /// Quit from the tray. Usually real; sometimes Verity only pretends: he and the
-/// tray icon disappear, and he comes back angry about half an hour later.
+/// tray icon disappear, and he comes back angry a minute later.
 /// The timer lives here, not in the webview, so it can't be throttled away.
 /// VERITY_FAKE_QUIT_CHANCE / VERITY_FAKE_QUIT_SECS override both, for testing.
 fn quit(app: &AppHandle) {
@@ -83,10 +83,7 @@ fn quit(app: &AppHandle) {
         app.exit(0);
         return;
     }
-    let (lo, hi) = FAKE_QUIT_MINUTES;
-    let away = env("VERITY_FAKE_QUIT_SECS")
-        .map(|s| s as u64)
-        .unwrap_or_else(|| (lo + (roll() * (hi - lo + 1) as f64) as u64) * 60);
+    let away = env("VERITY_FAKE_QUIT_SECS").map(|s| s as u64).unwrap_or(FAKE_QUIT_SECS);
     if let Some(settings) = app.get_webview_window("settings") {
         let _ = settings.close();
     }
@@ -210,7 +207,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Verity settings")
-        .inner_size(340.0, 620.0)
+        .inner_size(360.0, 640.0)
         .resizable(false)
         .build()
         .map(|_| ())

@@ -1,0 +1,6 @@
+dist
+node_modules
+.playwright-mcp
+release
+src-tauri/gen
+src-tauri/target

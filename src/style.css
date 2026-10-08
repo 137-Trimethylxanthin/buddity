@@ -1,0 +1,297 @@
+:root {
+  --ink: #000;
+  --bubble: #fffdf2;
+  --bubble-edge: #7a5200;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: "Comic Neue", "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
+}
+
+#stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Face ---------- */
+
+#buddy {
+  position: absolute;
+  z-index: 2; /* in front of the treadmill and puddles */
+  left: 0;
+  top: 0;
+  width: 160px;
+  height: 160px;
+  will-change: transform;
+}
+
+#verity {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  filter: drop-shadow(0 6px 8px rgb(0 0 0 / 0.3));
+  transition: filter 1.2s, transform 0.15s;
+}
+#verity:active { cursor: grabbing; }
+/* The canvas is larger than the hit box so squash and stretch aren't clipped. */
+#verity canvas { position: absolute; pointer-events: none; }
+#verity.drag { animation: dangle 0.5s ease-in-out infinite alternate; }
+#verity.hover { transform: scale(1.04); }
+
+@keyframes dangle {
+  from { transform: rotate(-8deg); }
+  to { transform: rotate(8deg); }
+}
+
+#verity.creepy { filter: drop-shadow(0 0 18px rgb(200 0 0 / 0.55)) drop-shadow(0 6px 10px rgb(0 0 0 / 0.6)) saturate(0.8) contrast(1.15); }
+#verity.twitch { animation: twitch 0.25s steps(2) 2; }
+@keyframes twitch {
+  0% { transform: translate(2px, -1px) rotate(-3deg); }
+  100% { transform: translate(-2px, 1px) rotate(3deg); }
+}
+
+#verity.giggle { animation: giggle 0.12s ease-in-out 6 alternate; }
+@keyframes giggle {
+  from { transform: rotate(-6deg) scale(1.03); }
+  to { transform: rotate(6deg) scale(0.98); }
+}
+
+/* Growing into Obesity / slimming back to Verity. */
+#verity.morph-grow { animation: morph-grow 0.9s cubic-bezier(.3, 1.6, .5, 1); }
+#verity.morph-shrink { animation: morph-shrink 0.9s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes morph-grow {
+  0% { transform: scale(0.72, 0.8); }
+  45% { transform: scale(1.12, 0.92); }
+  100% { transform: scale(1, 1); }
+}
+@keyframes morph-shrink {
+  0% { transform: scale(1.35, 1.25); }
+  45% { transform: scale(0.9, 1.08); }
+  100% { transform: scale(1, 1); }
+}
+
+/* ---------- Evil mode ---------- */
+
+/* Dark red creeping in from the screen edges. */
+#vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 2.5s;
+  background: radial-gradient(ellipse at center, transparent 45%, rgb(70 0 0 / 0.45) 80%, rgb(15 0 0 / 0.8) 100%);
+}
+#vignette.on { opacity: 1; animation: vignette-pulse 4s ease-in-out infinite; }
+@keyframes vignette-pulse {
+  50% { opacity: 0.65; }
+}
+
+#verity.glitch { animation: glitch 0.4s steps(1) 1; }
+@keyframes glitch {
+  0% { transform: translate(-6px, 2px); filter: drop-shadow(-5px 0 0 rgb(255 0 60 / 0.8)) drop-shadow(5px 0 0 rgb(0 255 255 / 0.7)); }
+  20% { transform: translate(5px, -3px) skewX(12deg); filter: drop-shadow(4px 0 0 rgb(255 0 60 / 0.8)) hue-rotate(90deg); }
+  40% { transform: translate(-3px, 0) scaleY(0.9); opacity: 0.6; }
+  60% { transform: translate(7px, 1px) skewX(-10deg); filter: drop-shadow(-6px 0 0 rgb(0 255 255 / 0.7)) invert(0.2); }
+  80% { transform: translate(-2px, -2px); opacity: 0.85; }
+  100% { transform: none; filter: none; opacity: 1; }
+}
+#verity.vanish { animation: vanish 0.35s ease-in forwards; }
+@keyframes vanish {
+  to { transform: scale(1.4, 0.05); opacity: 0; filter: brightness(3); }
+}
+#verity.appear { animation: appear 0.4s ease-out; }
+@keyframes appear {
+  from { transform: scale(0.05, 1.6); opacity: 0; filter: brightness(3); }
+}
+
+/* ---------- Food, puke, treadmill ---------- */
+
+.food {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 40px;
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.35));
+}
+.food.eaten { animation: eaten 0.45s ease-in forwards; }
+@keyframes eaten {
+  to { opacity: 0; scale: 0.2; }
+}
+
+.puke {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: hsl(var(--hue, 80) 70% 42%);
+  box-shadow: inset -2px -2px 0 hsl(var(--hue, 80) 70% 30%);
+}
+.puke.puddle { width: 22px; height: 6px; border-radius: 50% / 100% 100% 0 0; }
+.fade { transition: opacity 0.8s; opacity: 0; }
+.puke.fade { transition-delay: 2.2s; }
+
+.treadmill {
+  position: absolute;
+  bottom: 0;
+  width: 240px;
+  height: 34px;
+  pointer-events: none;
+  animation: drop-in 0.4s cubic-bezier(.3, 1.5, .5, 1);
+}
+.tm-belt {
+  position: absolute;
+  inset: 8px 0 0 0;
+  border-radius: 14px;
+  background:
+    repeating-linear-gradient(90deg, #2b2b2f 0 14px, #3a3a40 14px 28px),
+    #2b2b2f;
+  border: 4px solid #8c8f99;
+  box-shadow: 0 4px 8px rgb(0 0 0 / 0.35);
+}
+.treadmill.running .tm-belt { animation: belt 0.35s linear infinite; }
+@keyframes belt {
+  from { background-position: 0 0; }
+  to { background-position: -28px 0; }
+}
+.tm-post {
+  position: absolute;
+  right: 10px;
+  bottom: 20px;
+  width: 8px;
+  height: 120px;
+  border-radius: 4px;
+  background: #8c8f99;
+  transform: rotate(-12deg);
+  transform-origin: bottom;
+}
+.tm-bar {
+  position: absolute;
+  right: 4px;
+  bottom: 132px;
+  width: 54px;
+  height: 10px;
+  border-radius: 5px;
+  background: #c9302c;
+}
+@keyframes drop-in {
+  from { transform: translateY(-80px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+/* ---------- Right-click menu ---------- */
+
+#menu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bubble);
+  border: 3px solid var(--bubble-edge);
+  border-radius: 16px;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.3);
+  transition: opacity 0.15s;
+}
+#menu.hidden { opacity: 0; pointer-events: none; }
+.menu-row { display: flex; gap: 6px; }
+.menu-row button {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border: 2px solid var(--bubble-edge);
+  border-radius: 10px;
+  background: #ffd21f;
+  color: var(--ink);
+  cursor: pointer;
+}
+.menu-row button:hover { background: #fff27a; }
+.menu-row button.active { background: #7a5200; color: #fff6c9; }
+
+/* ---------- Floating notes and hearts ---------- */
+
+.particle {
+  position: absolute;
+  pointer-events: none;
+  font-size: 26px;
+  font-weight: 700;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.35);
+  animation: float-up 1.7s ease-out forwards;
+}
+@keyframes float-up {
+  0% { transform: translate(-50%, 0) scale(0.5) rotate(0); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), -120px) scale(1.1) rotate(var(--spin)); opacity: 0; }
+}
+
+/* ---------- Speech bubble ---------- */
+
+#bubble {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  top: 0;
+  width: 240px;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  background: var(--bubble);
+  color: var(--ink);
+  border: 3px solid var(--bubble-edge);
+  border-radius: 18px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.25);
+  transition: opacity 0.2s;
+}
+#bubble::after {
+  content: "";
+  position: absolute;
+  left: var(--tail, 50%);
+  bottom: -13px;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  background: var(--bubble);
+  border-right: 3px solid var(--bubble-edge);
+  border-bottom: 3px solid var(--bubble-edge);
+  transform: rotate(45deg);
+}
+#bubble.hidden { opacity: 0; pointer-events: none; }
+#bubble.creepy { background: #1a0f0f; color: #ffe9a8; --bubble: #1a0f0f; border-color: #8a1c1c; }
+#bubble.creepy::after { border-color: #8a1c1c; }
+#bubble p { margin: 0; min-height: 1.3em; }
+
+#bubble-choices { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+#bubble-choices:not(:empty) { margin-top: 8px; }
+#bubble-choices button {
+  font: inherit;
+  font-size: 14px;
+  padding: 3px 10px;
+  border: 2px solid var(--bubble-edge);
+  border-radius: 10px;
+  background: #ffd21f;
+  color: var(--ink);
+  cursor: pointer;
+}
+#bubble-choices button:hover { background: #fff27a; }

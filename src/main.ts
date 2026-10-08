@@ -1,24 +1,39 @@
 import { Buddy, type Side, type State } from "./buddy";
 import { BALL_FILL, Face, type Mouth, type Press } from "./face";
-import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pick, quiz, randomLine, render, type Context, type Mood, type Stats } from "./lines";
+import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pauseLines, pick, placeLines, quiz, randomLine, render, songLines, type Context, type Mood, type Stats } from "./lines";
 import { ContextMenu, type MenuItem } from "./menu";
 import {
   cursorTo,
   discordStatus,
+  getPcInfo,
+  getScreens,
   getUptime,
   getUsername,
   inTauri,
+  moveToScreen,
+  onMirrorShown,
+  sendMirror,
   onCursor,
   onFakeQuit,
+  appWindowsFast,
+  onAppWindows,
+  onMusic,
   onSetting,
   onTray,
   onWardrobe,
   openSettings,
   scrollActive,
   setHitRegions,
+  setAppWindows,
+  setMusic,
+  type AppWindow,
   type Rect,
+  type Screen,
+  type Track,
 } from "./native";
 import { emit } from "./particles";
+import { Music, songKey, type LyricLine } from "./music";
+import { appName, ledges, placeOf, sameApp, toBoxes, type Place, type WindowBox } from "./places";
 import { Prop, spawnFood, spawnPuke, Treadmill } from "./props";
 import { isSkinId, SKIN_IDS, SKINS, type Skin } from "./skins";
 import { BEAT_S, snippets, vowelOf } from "./song";
@@ -63,6 +78,19 @@ const SCROLL_STEP_MS = 140; // one line scrolled per step while he rolls on the 
 const ROLL_SPEED = 260; // px/s he spins on the spot while scrolling
 const PET_FRAMES = 10; // the PetPet hand: one pass of its 10 frames
 const PET_FRAME_MS = 30;
+const PC_INFO_EVERY_MS = 60_000;
+const ROAM_CHANCE = 0.2; // of idle chatter turning into a trip to another screen
+const EXPLORE_CHANCE = 0.3; // of idle chatter turning into a visit to some app's window
+const MUSIC_WINDOW_PULL = 0.7; // while music plays, how often that visit is to the music app
+const PLACE_SETTLE_MS = 2500; // somewhere this long before he remarks on it
+const PLACE_REMARK_CHANCE = 0.3;
+const WINDOW_HIT_SPEED = 250; // px/s: a window dragged into him faster than this knocks him away
+const SONG_REACT_CHANCE = 0.6; // says something about a new song
+const SONG_DANCE_CHANCE = 0.6; // dances to a new song
+const DANCE_MS: [number, number] = [15_000, 35_000];
+const SING_ALONG_CHANCE = 0.7; // per song, he sings a few lines of it at some point
+const SING_ALONG_LINES: [number, number] = [2, 4];
+const LYRIC_LINE_MAX_MS = 4500; // the bubble doesn't stay up longer than this per line
 
 const stageEl = document.getElementById("stage")!;
 const vignetteEl = document.getElementById("vignette")!;
@@ -93,7 +121,7 @@ function count(stat: keyof Stats): void {
   save("stats", JSON.stringify(ctx.stats));
 }
 
-const ctx: Context = { user: "friend", now: new Date(), skin, uptime: null, startedAt: new Date(), stats: loadStats() };
+const ctx: Context = { user: "friend", now: new Date(), skin, uptime: null, startedAt: new Date(), stats: loadStats(), pc: null, music: null, place: null };
 // Uptime is read once at start and advanced from the clock after that.
 let uptimeAtStart: number | null = null;
 
@@ -501,6 +529,11 @@ function scrollRoll(lines: number): void {
   rollDir = dir;
   rollUntil = now + steps * SCROLL_STEP_MS + 150;
   buddy.hold(now, steps * SCROLL_STEP_MS + 400);
+  // Scrolling goes to the window under the cursor: put it on him, so it's the window he's in that scrolls.
+  if (ctx.place) {
+    const { x } = centre();
+    cursorTo(x, buddy.y + buddy.h / 2).catch(() => {});
+  }
   for (let i = 0; i < steps; i++)
     window.setTimeout(() => {
       if (!gone) scrollActive(dir);
@@ -555,7 +588,14 @@ function untouchable(): boolean {
   return performance.now() < untouchableUntil;
 }
 
+/** Gone, or crashing out: nothing (windows, songs, dancing) gets to push him around. */
+function invulnerable(): boolean {
+  return gone || untouchable();
+}
+
 function vanish(): void {
+  stopSinging();
+  stopDance();
   gone = true;
   crashRound++;
   pushUntil = 0;
@@ -577,6 +617,8 @@ function vanish(): void {
 }
 
 function crashOut(): void {
+  stopSinging();
+  stopDance();
   gone = false;
   count("closes");
   refreshCtx();
@@ -936,6 +978,9 @@ function frame(now: number): void {
   for (let i = props.length - 1; i >= 0; i--) if (props[i].gone) props.splice(i, 1);
   runErrands(now);
   updateWorkout(now);
+  updateDance(now);
+  updateCrossing();
+  updatePlace(now);
   maybePester(now);
 
   if (speech.visible) placeBubble();
@@ -996,6 +1041,8 @@ window.addEventListener("mousedown", (e) => {
 });
 window.addEventListener("mousemove", (e) => {
   if (!pressing) return;
+  // The button came up somewhere we didn't hear about (e.g. while the window moved screens).
+  if ((e.buttons & 1) === 0) return letGo();
   const now = performance.now();
   if (press && !squeezing && Math.hypot(e.clientX - press.x, e.clientY - press.y) > DRAG_THRESHOLD) {
     buddy.startDrag(press.x, press.y, now);
@@ -1011,19 +1058,25 @@ window.addEventListener("mouseup", (e) => {
   const wasSqueezing = squeezing;
   endSqueeze();
   if (e.button !== 0 || !pressing) return;
+  if (buddy.state !== "drag" && press && !wasSqueezing) {
+    count("clicks");
+    talk();
+  }
+  letGo();
+});
+
+/** The left button is up: a held Verity is thrown (or just dropped). */
+function letGo(): void {
   pressing = false;
   if (buddy.state === "drag") {
     face.setPress(null);
     buddy.release();
     if (Math.hypot(buddy.vx, buddy.vy) > THROW_SPEED) count("throws");
     if (mood === "friendly" && Math.hypot(buddy.vx, buddy.vy) > 900 && Math.random() < 0.4) say("Wheee! ☺");
-  } else if (press && !wasSqueezing) {
-    count("clicks");
-    talk();
   }
   press = null;
   regionsDirty = true;
-});
+}
 faceEl.addEventListener("dblclick", () => {
   giggle();
   say("tee hee ☺");
@@ -1091,6 +1144,549 @@ function dress(next: AccessoryId[]): void {
 }
 onWardrobe(dress);
 
+// ---------- Several screens ----------
+// The character window covers one screen, and every screen has a mirror window.
+// Screens side by side form one wide floor: his walls are the outer edges, so
+// he moves straight through the edges between screens. While he overlaps an
+// edge the mirrors draw him (on both screens, so there's no seam) and this
+// window hides its copy; once his middle is past the edge this window moves to
+// that screen. Never mid-drag: moving the window would end the drag, so he can
+// be dragged onto the next screen and the window follows when he's let go.
+
+let roamOn = setting("screens");
+let knownScreens: Screen[] = [];
+let here: number | null = null; // the screen his coordinates are relative to
+let hopping = false; // the window is on its way to another screen
+let mirroring = false;
+
+async function refreshScreens(): Promise<void> {
+  knownScreens = await getScreens();
+  if (!hopping) here = knownScreens.findIndex((s) => s.current);
+  updateBounds();
+  updatePlaces(false);
+}
+
+/** Screens he can cross into: side by side with mirrors, chained from this one. */
+function connectedRange(): { left: number; right: number } | null {
+  const cur = here === null ? undefined : knownScreens[here];
+  if (!cur || !cur.mirror) return null;
+  let left = cur.x;
+  let right = cur.x + cur.w;
+  // Grow the floor sideways while the next screen over has a mirror.
+  for (;;) {
+    const l = knownScreens.find((s) => s.mirror && Math.abs(s.x + s.w - left) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
+    if (!l) break;
+    left = l.x;
+  }
+  for (;;) {
+    const r = knownScreens.find((s) => s.mirror && Math.abs(s.x - right) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
+    if (!r) break;
+    right = r.x + r.w;
+  }
+  return right - left > cur.w ? { left, right } : null;
+}
+
+/** Walls on the outermost screens, unless things on this screen keep him here. */
+function updateBounds(): void {
+  const range = roamOn && !treadmill && foods().length === 0 ? connectedRange() : null;
+  const cur = here === null ? undefined : knownScreens[here];
+  buddy.bounds =
+    range && cur ? { left: (range.left - cur.x) / cur.scale, right: (range.right - cur.x) / cur.scale } : null;
+}
+
+/** Physical x of a window x, on the screen his coordinates are relative to. */
+function physicalX(x: number): number | null {
+  const cur = here === null ? undefined : knownScreens[here];
+  return cur ? cur.x + x * cur.scale : null;
+}
+
+/**
+ * Each frame: draw him in the mirrors while he overlaps an edge, and follow
+ * him onto the next screen. While he's held, this window keeps drawing its own
+ * part (the part under your cursor stays snappy) and only the other screen's
+ * mirror draws the rest. Otherwise the mirrors draw all of him, so both halves
+ * line up exactly; this window hides its copy once they've shown a frame.
+ */
+function updateCrossing(): void {
+  updateBounds(); // food or the treadmill keep him on this screen
+  const cur = here === null ? undefined : knownScreens[here];
+  if (!buddy.bounds || !cur || gone) {
+    if (mirroring) stopMirroring();
+    return;
+  }
+  // His middle went past an edge: this window moves to that screen. Not while he's held:
+  // the moved window doesn't get the mouse back, so it follows once he's let go.
+  const mid = buddy.x + buddy.w / 2;
+  if (!hopping && buddy.state !== "drag" && (mid < 0 || mid > cur.w / cur.scale)) void follow(physicalX(mid)!);
+
+  const over = buddy.x < -2 || buddy.x + buddy.w > cur.w / cur.scale + 2;
+  if (!over && !hopping) {
+    if (mirroring) stopMirroring();
+    return;
+  }
+  const held = buddy.state === "drag";
+  if (!mirroring || held !== mirrorHeld) {
+    // A new crossing, or he was picked up or let go: wait for the mirrors to catch up again.
+    mirroring = true;
+    mirrorHeld = held;
+    mirrorSession++;
+  }
+  // Hidden while the window is moving, and once the mirror on this screen is drawing him too.
+  const mirrored = !held && mirrorShown.session === mirrorSession && mirrorShown.screen === here;
+  faceEl.style.visibility = hopping || mirrored ? "hidden" : "";
+  sendMirror({
+    session: mirrorSession,
+    owner: hopping ? null : here,
+    ownerDraws: held && !hopping,
+    skin: skin.id,
+    worn,
+    cls: faceEl.className,
+    x: physicalX(buddy.x)!,
+    bottom: (innerHeight - buddy.y - buddy.h) * cur.scale,
+    pose: face.pose(),
+  });
+}
+
+let mirrorSession = 0;
+let mirrorHeld = false;
+let mirrorShown = { session: -1, screen: -1 }; // the latest frame a mirror has drawn
+onMirrorShown((shown) => {
+  if (shown.session >= mirrorShown.session) mirrorShown = shown;
+});
+
+function stopMirroring(): void {
+  mirroring = false;
+  faceEl.style.visibility = "";
+  sendMirror(null);
+}
+
+/** Move this window to the screen at physical x, keeping him exactly where he is on the desktop. */
+async function follow(physX: number): Promise<void> {
+  const next = knownScreens.findIndex((s) => s.mirror && physX >= s.x && physX < s.x + s.w);
+  const cur = here === null ? undefined : knownScreens[here];
+  if (next < 0 || next === here || !cur) return;
+  const to = knownScreens[next];
+  hopping = true;
+  // Switch coordinates now, so the mirrors never see a jump.
+  buddy.shift((cur.x - to.x + buddy.x * (cur.scale - to.scale)) / to.scale);
+  here = next;
+  updateBounds();
+  updatePlaces(false);
+  speech.hide();
+  menu.close();
+  const heightBefore = innerHeight;
+  const settled = new Promise<void>((done) => {
+    window.addEventListener("resize", () => done(), { once: true });
+    window.setTimeout(done, 300); // same-size screens don't resize the window
+  });
+  const moved = await moveToScreen(next);
+  if (moved) await settled;
+  // Keep his height above the floor if this screen's window is taller or shorter (bars).
+  buddy.y += innerHeight - heightBefore;
+  updatePlaces(false);
+  face.refreshPixelRatio();
+  save("screen", String(next));
+  hopping = false;
+  lastRegionKey = ""; // the window may have been recreated on the new screen: send its click-through shape again
+  regionsDirty = true;
+  void refreshScreens();
+}
+
+/** Now and then he rolls off to another screen by himself. */
+function roam(): boolean {
+  const cur = here === null ? undefined : knownScreens[here];
+  if (!buddy.bounds || !cur || !free() || partying) return false;
+  const width = cur.w / cur.scale;
+  const sides = [buddy.bounds.left < -1 ? -1 : 0, buddy.bounds.right > width + 1 ? 1 : 0].filter(Boolean);
+  if (!sides.length) return false;
+  const dir = sides[Math.floor(Math.random() * sides.length)];
+  // Somewhere a few hundred px into the screen next door.
+  const x = dir < 0 ? -250 - Math.random() * 500 : width + 250 + Math.random() * 500;
+  buddy.seek(x, () => {});
+  return true;
+}
+
+/** Start on the screen he was last on. */
+async function restoreScreen(): Promise<void> {
+  await refreshScreens();
+  const saved = Number(load("screen") ?? NaN);
+  if (!roamOn || !Number.isInteger(saved) || !knownScreens[saved] || saved === here) return;
+  if (await moveToScreen(saved)) {
+    window.setTimeout(() => {
+      face.refreshPixelRatio();
+      buddy.recall();
+      regionsDirty = true;
+      void refreshScreens();
+    }, 300);
+  }
+}
+
+// ---------- Other apps' windows ----------
+// Their tops and bottoms are ledges (see places.ts); he knows which app he's
+// next to, sometimes goes to visit a window, and on the window of the app
+// that's playing music he parties: dances and sings every line until he's moved off.
+
+let windowsOn = setting("windows");
+let appWindows: AppWindow[] = [];
+let boxes: WindowBox[] = [];
+let placeKey = "";
+let placeSince = 0;
+let placeRemarked = true;
+let partying = false;
+let karaokeLine = -1;
+let karaokeMouth = 0;
+let fastWindows = false;
+
+/** Rebuilds the ledges from the latest window list. carry=false when only the coordinates changed (screen switch). */
+let boxesAt = 0;
+
+function updatePlaces(carry = true): void {
+  const cur = here === null ? undefined : knownScreens[here];
+  const before = boxes;
+  const at = performance.now();
+  const dt = Math.max(0.008, (at - boxesAt) / 1000);
+  boxesAt = at;
+  boxes = windowsOn && cur ? toBoxes(appWindows, knownScreens, cur, innerHeight) : [];
+  // On (or in) a window that's moved or resized: he's loose on it, pushed around by it.
+  const ledge = buddy.standingOn?.id.match(/^(.*):(in|top)$/);
+  const inside = buddy.container?.id ?? ledge?.[1] ?? null;
+  const kind = buddy.container?.kind ?? (ledge?.[2] as "in" | "top" | undefined) ?? "in";
+  if (inside && invulnerable()) {
+    buddy.leaveBox(); // crashing out: no window holds him
+  } else if (inside) {
+    const now = boxes.find((b) => b.id === inside);
+    const was = before.find((b) => b.id === inside);
+    if (!now) buddy.leaveBox();
+    else if (!carry) buddy.moveBox(now, kind, performance.now(), false);
+    else if (was && (now.x !== was.x || now.y !== was.y || now.w !== was.w || now.h !== was.h)) buddy.moveBox(now, kind, performance.now());
+  }
+  buddy.setPlatforms(ledges(boxes, innerHeight, buddy.w, buddy.h), carry);
+  if (carry) hitByWindows(before, inside, dt);
+}
+
+/** A window dragged into him knocks him away (not the one he's in or on, and not while he's crashing out). */
+function hitByWindows(before: WindowBox[], mine: string | null, dt: number): void {
+  if (invulnerable() || pushing() || buddy.state === "drag" || buddy.state === "exercise") return;
+  const me = { x: buddy.x, y: buddy.y, w: buddy.w, h: buddy.h };
+  const touches = (b: { x: number; y: number; w: number; h: number }) =>
+    b.x < me.x + me.w && b.x + b.w > me.x && b.y < me.y + me.h && b.y + b.h > me.y;
+  for (const b of boxes) {
+    if (b.id === mine) continue;
+    const was = before.find((p) => p.id === b.id);
+    if (!was || (was.x === b.x && was.y === b.y)) continue; // new, or not moved (resizing doesn't hit)
+    if (!touches(b) || touches(was)) continue; // only the moment it reaches him
+    const vx = (b.x - was.x) / dt;
+    const vy = (b.y - was.y) / dt;
+    if (Math.hypot(vx, vy) < WINDOW_HIT_SPEED) continue; // drifting slowly over him is fine
+    buddy.knock(vx, vy, b);
+    if (Math.random() < 0.4) window.setTimeout(() => say(pick(ouchLines, ctx)), 250);
+    return;
+  }
+}
+
+onAppWindows((list) => {
+  appWindows = list;
+  updatePlaces();
+});
+window.addEventListener("resize", () => updatePlaces(false));
+
+/** Each frame: where he is, and the party on the music app's window. */
+function updatePlace(now: number): void {
+  // Standing on a window: follow it every frame, in case it's being dragged.
+  const onWindow = buddy.standingOn !== null || buddy.container !== null;
+  if (onWindow !== fastWindows) {
+    fastWindows = onWindow;
+    appWindowsFast(onWindow);
+  }
+  const found = boxes.length ? placeOf(boxes, buddy.standingOn, buddy.x + buddy.w / 2, buddy.y + buddy.h / 2) : null;
+  const place: Place | null = found && { app: appName(found.app), on: found.on };
+  const key = place ? `${place.app}|${place.on}` : "";
+  if (key !== placeKey) {
+    placeKey = key;
+    placeSince = now;
+    placeRemarked = false;
+    ctx.place = place;
+  }
+  // Settled somewhere new for a moment: sometimes he says so.
+  if (!placeRemarked && place && now - placeSince > PLACE_SETTLE_MS && buddy.grounded) {
+    placeRemarked = true;
+    if (Math.random() < PLACE_REMARK_CHANCE && free()) say(pick(placeLines[mood][place.on], ctx));
+  }
+
+  const t = music.track;
+  const party =
+    !!place && !!t && music.playing && sameApp(t.player, place.app) &&
+    !gone && !untouchable() && !pushing() && buddy.state !== "drag" && buddy.state !== "exercise";
+  if (party) {
+    if (!partying) {
+      partying = true;
+      window.clearTimeout(singAlongTimer);
+      if (setting("lyrics")) void music.loadLyrics();
+    }
+    if (buddy.grounded) buddy.hold(now, 600); // stays until he's moved off
+    dance(4000);
+    karaoke();
+  } else if (partying) {
+    partying = false;
+    endKaraoke();
+  }
+}
+
+/** On the music app's window: every lyric line in the bubble as it comes up. */
+function karaoke(): void {
+  const lines = music.lyrics;
+  const pos = music.position();
+  if (!lines || pos === null) return;
+  let i = -1;
+  while (i + 1 < lines.length && lines[i + 1].t <= pos + 0.15) i++;
+  if (i === karaokeLine) return;
+  karaokeLine = i;
+  window.clearInterval(karaokeMouth);
+  face.setMouth("smile");
+  const line = lines[i];
+  // Between verses (or before the first line) the bubble goes away.
+  if (!line || pos - line.t > 8) {
+    if (singing) speech.hideLater(300);
+    return;
+  }
+  singing = true; // keeps other chatter out of the bubble
+  speech.show(`♪ ${line.text} ♪`, mood);
+  regionsDirty = true;
+  const until = performance.now() + Math.min(LYRIC_LINE_MAX_MS, ((lines[i + 1]?.t ?? line.t + 4) - line.t) * 1000);
+  const mouths: Mouth[] = ["open", "o", "smile", "open"];
+  let m = 0;
+  karaokeMouth = window.setInterval(() => {
+    if (performance.now() > until) {
+      window.clearInterval(karaokeMouth);
+      face.setMouth("smile");
+    } else face.setMouth(mouths[m++ % mouths.length]);
+  }, 160);
+}
+
+function endKaraoke(): void {
+  window.clearInterval(karaokeMouth);
+  face.setMouth("smile");
+  if (karaokeLine !== -1 || singing) {
+    singing = false;
+    speech.hideLater(500);
+  }
+  karaokeLine = -1;
+}
+
+/** Now and then he goes to visit some app's window: in front of it, inside it or on top. Music draws him to the player. */
+function explore(): boolean {
+  if (!boxes.length || !free() || partying) return false;
+  const left = buddy.bounds?.left ?? 0;
+  const right = buddy.bounds?.right ?? innerWidth;
+  const reachable = boxes.filter((b) => b.x + b.w > left + 40 && b.x < right - 40);
+  const player = music.playing && music.track ? reachable.filter((b) => sameApp(music.track!.player, b.app)) : [];
+  const pool = player.length && Math.random() < MUSIC_WINDOW_PULL ? player : reachable;
+  const box = pool[Math.floor(Math.random() * pool.length)];
+  if (!box) return false;
+  const lo = Math.max(box.x, left) + buddy.w / 2;
+  const hi = Math.min(box.x + box.w, right) - buddy.w / 2;
+  // A ledge on that window, if it has one he can reach: into it (bottom) or onto it (top).
+  const ledge = buddy.platforms.filter((p) => p.id.startsWith(`${box.id}:`))[Math.floor(Math.random() * 2)];
+  const x = ledge ? (Math.max(ledge.x1, lo) + Math.min(ledge.x2, hi)) / 2 : lo + Math.random() * Math.max(0, hi - lo);
+  buddy.seek(x, () => {
+    if (ledge && buddy.platforms.some((p) => p.id === ledge.id)) buddy.jumpTo(x, ledge.y);
+  });
+  return true;
+}
+
+// ---------- Music: dancing and singing along ----------
+
+let musicOn = setting("music");
+let danceUntil = 0;
+let lastDanceNote = 0;
+let singAlongTimer = 0;
+
+const music = new Music({
+  onSong(track) {
+    ctx.music = track;
+    if (setting("lyrics")) {
+      void music.loadLyrics();
+      void music.loadTempo();
+    }
+    window.clearTimeout(singAlongTimer);
+    // Give the song a moment, then maybe react and dance.
+    window.setTimeout(() => {
+      if (music.track !== track && music.track?.title !== track.title) return;
+      if (Math.random() < SONG_REACT_CHANCE) sayWhenFree(() => pick(songLines[mood], ctx), () => music.track?.title === track.title);
+      if (Math.random() < SONG_DANCE_CHANCE) window.setTimeout(() => dance(), 2500);
+    }, 1500 + Math.random() * 2500);
+    if (Math.random() < SING_ALONG_CHANCE) scheduleSingAlong(track);
+  },
+  onPause() {
+    ctx.music = music.track;
+    stopDance();
+    if (Math.random() < 0.3 && free()) say(pick(pauseLines[mood], ctx));
+  },
+  onResume() {
+    ctx.music = music.track;
+    if (setting("lyrics")) {
+      // The song may have been noticed while paused.
+      void music.loadLyrics();
+      void music.loadTempo();
+    }
+    if (Math.random() < 0.4) dance();
+  },
+  onStop() {
+    ctx.music = null;
+    stopDance();
+    window.clearTimeout(singAlongTimer);
+  },
+});
+onMusic((track) => {
+  if (musicOn) music.update(track);
+});
+
+/** Say something once he's done with whatever he's doing (gives up after a few tries, or once it's no longer true). */
+function sayWhenFree(line: () => string, still: () => boolean, tries = 6): void {
+  if (!still()) return;
+  if (free()) return say(line());
+  if (tries > 1) window.setTimeout(() => sayWhenFree(line, still, tries - 1), 2500);
+}
+
+/** Not busy with anything else, so he can start something new. */
+function free(): boolean {
+  return !speech.visible && !singing && !buddy.busy && !gone && !pushing() && !untouchable() && buddy.state === "idle";
+}
+
+function dancing(): boolean {
+  return performance.now() < danceUntil;
+}
+
+/** Dance on the spot while music plays. */
+/** Dance on the spot while music plays (talking while dancing is fine). Already dancing: keep going at least this long. */
+function dance(ms = DANCE_MS[0] + Math.random() * (DANCE_MS[1] - DANCE_MS[0]), tries = 4): void {
+  const now = performance.now();
+  if (dancing()) {
+    danceUntil = Math.max(danceUntil, now + ms);
+    return;
+  }
+  if (!music.playing || gone || pushing() || untouchable() || buddy.busy) return;
+  buddy.hold(now, ms); // stops wandering
+  if (buddy.state !== "idle") {
+    // Mid-hop or falling: try again once he's landed.
+    if (tries > 1) window.setTimeout(() => dance(ms, tries - 1), 1500);
+    return;
+  }
+  danceUntil = now + ms;
+  face.setDance(true, () => music.beat()); // on the song's beat once its tempo is known
+}
+
+function stopDance(): void {
+  if (!danceUntil) return;
+  danceUntil = 0;
+  face.setDance(false);
+}
+
+/** Each frame while dancing: notes float up now and then; grabbing him or the music stopping ends it. */
+function updateDance(now: number): void {
+  if (!danceUntil) return;
+  if (now >= danceUntil || !music.playing || invulnerable() || buddy.busy || pushing()) return stopDance();
+  buddy.hold(now, 400); // stays on the spot
+  if (now - lastDanceNote > 1000) {
+    lastDanceNote = now;
+    const { x, y } = centre();
+    emit(stageEl, x + (Math.random() - 0.5) * buddy.w, y, pickGlyph(), skin.particleColor);
+  }
+}
+
+/** Some time into the song, sing a few lines of it along with the music. */
+function scheduleSingAlong(track: Track): void {
+  const len = track.duration ?? 180;
+  const at = len * (0.15 + Math.random() * 0.35);
+  const pos = music.position() ?? 0;
+  const key = songKey(track);
+  singAlongTimer = window.setTimeout(() => singAlong(key), Math.max(5, at - pos) * 1000);
+}
+
+/**
+ * Sings the next few lines of the song. Being busy (held, thrown, mid-sentence)
+ * only postpones it; he keeps trying until the song is nearly over.
+ */
+function singAlong(key: string | null = music.track && songKey(music.track)): void {
+  const t = music.track;
+  if (!t || !key || songKey(t) !== key || !music.playing) return; // the song changed or stopped
+  const pos = music.position();
+  const lines = music.lyrics;
+  const nearlyOver = pos !== null && t.duration !== null && pos > t.duration - 20;
+  if (nearlyOver || (lines === null && music.lyricsDone)) return; // too late, or no lyrics for this song
+  const ready = lines !== null && pos !== null;
+  const busy = gone || singing || partying || untouchable() || pushing() || hopping || buddy.state === "drag" || buddy.state === "fall";
+  if (!ready || busy) {
+    singAlongTimer = window.setTimeout(() => singAlong(key), 3000);
+    return;
+  }
+  const first = lines.findIndex((l) => l.t > pos + 1);
+  if (first < 0) return;
+  const count = SING_ALONG_LINES[0] + Math.floor(Math.random() * (SING_ALONG_LINES[1] - SING_ALONG_LINES[0] + 1));
+  buddy.hold(performance.now(), 4000); // stay put for the song
+  sungLines(lines.slice(first, first + count), lines[first + count]?.t ?? null, pos);
+}
+
+/** Shows each line in the bubble when it comes up in the song, mouthing along (no voice: the song is the voice). */
+let singRound = 0; // bumped to cut off a sing-along that's in progress
+
+/** Stop any singing along right now (he's crashing out, or vanished). */
+function stopSinging(): void {
+  singRound++;
+  window.clearTimeout(singAlongTimer);
+  endKaraoke();
+  singing = false;
+  face.setMouth("smile");
+}
+
+function sungLines(lines: LyricLine[], endT: number | null, pos: number): void {
+  const key = music.track && songKey(music.track);
+  dance(60_000);
+  singing = true;
+  let mouthTimer = 0;
+  let over = false;
+  const round = ++singRound;
+  const done = () => {
+    window.clearInterval(mouthTimer);
+    if (over) return;
+    over = true;
+    singing = false;
+    if (dancing()) danceUntil = Math.min(danceUntil, performance.now() + 8000); // dance a little more, then stop
+    face.setMouth("smile");
+    speech.hideLater(800);
+  };
+  lines.forEach((line, i) => {
+    const next = lines[i + 1]?.t ?? endT ?? line.t + 4;
+    window.setTimeout(() => {
+      if (over) return;
+      if (round !== singRound) {
+        over = true; // cut off (crashout): stopSinging already tidied up
+        window.clearInterval(mouthTimer);
+        return;
+      }
+      if (!music.playing || gone || (music.track && songKey(music.track)) !== key) return done();
+      speech.show(`♪ ${line.text} ♪`, mood);
+      regionsDirty = true;
+      window.clearInterval(mouthTimer);
+      const mouths: Mouth[] = ["open", "o", "smile", "open"];
+      let m = 0;
+      mouthTimer = window.setInterval(() => face.setMouth(mouths[m++ % mouths.length]), 160);
+      const lineMs = Math.min(LYRIC_LINE_MAX_MS, (next - line.t) * 1000);
+      window.setTimeout(() => {
+        if (over) return;
+        window.clearInterval(mouthTimer);
+        face.setMouth("smile");
+        if (i === lines.length - 1) done();
+      }, lineMs);
+    }, Math.max(0, (line.t - pos) * 1000));
+  });
+}
+
+/** Refreshes what he knows about the computer. */
+async function refreshPc(): Promise<void> {
+  ctx.pc = (await getPcInfo()) ?? ctx.pc;
+}
+
 // Changes made in the settings window. Autostart is applied there; the
 // jumpscare setting is read when it's needed.
 onSetting((key, on) => {
@@ -1099,6 +1695,25 @@ onSetting((key, on) => {
     say(on ? "I can sing again! ♪" : "Okay, I'll be quiet... tee hee");
   } else if (key === "discord") {
     updatePresence();
+  } else if (key === "music") {
+    musicOn = on;
+    setMusic(on);
+    if (!on) music.update(null);
+    say(on ? "Play me something! ♪" : "Okay, I won't listen to your music.");
+  } else if (key === "lyrics") {
+    if (on) {
+      void music.loadLyrics();
+      void music.loadTempo();
+    }
+  } else if (key === "windows") {
+    windowsOn = on;
+    setAppWindows(on);
+    updatePlaces();
+    say(on ? "Your windows look climbable. tee hee" : "Okay, I'll stay off your windows.");
+  } else if (key === "screens") {
+    roamOn = on;
+    updateBounds();
+    say(on ? "Your other screens look fun. tee hee" : "Okay, I'll stay on this screen.");
   } else if (key === "pester") {
     pesterOn = on;
     say(on ? "I'll come find you if you ignore me. tee hee" : "Fine. I'll leave your cursor alone.");
@@ -1132,7 +1747,10 @@ window.addEventListener("resize", () => (regionsDirty = true));
 function scheduleIdleChatter(): void {
   window.setTimeout(() => {
     if (!speech.visible && !singing && !buddy.busy && !gone) {
-      if (Math.random() < SING_CHANCE) sing();
+      if (Math.random() < EXPLORE_CHANCE && explore()) {
+        /* off to visit a window */
+      } else if (Math.random() < ROAM_CHANCE) roam();
+      else if (Math.random() < SING_CHANCE && !music.playing) sing(); // not over your music
       else talk();
     }
     if (mood === "creepy" && Math.random() < 0.5) face.twitch();
@@ -1152,6 +1770,12 @@ async function start(): Promise<void> {
   window.setTimeout(() => say(greet(mood, ctx)), 1200);
   scheduleIdleChatter();
   void initAutostart();
+  setMusic(musicOn);
+  setAppWindows(windowsOn);
+  void restoreScreen();
+  window.setInterval(() => void refreshScreens(), 30_000); // screens plugged in or out
+  void refreshPc();
+  window.setInterval(() => void refreshPc(), PC_INFO_EVERY_MS);
   window.setTimeout(checkForUpdate, UPDATE_FIRST_CHECK_MS);
   if (!inTauri) {
     document.body.style.background = "#556"; // see him in a plain browser
@@ -1176,6 +1800,60 @@ async function start(): Promise<void> {
       pet,
       scroll: () => scrollRoll(5),
       scrollup: () => scrollRoll(-5),
+      music: () =>
+        music.update({ title: "Get Lucky", artist: "Daft Punk", album: "Random Access Memories", duration: 248, position: 40, playing: true, player: "Spotify" }),
+      pause: () => music.track && music.update({ ...music.track, position: music.position(), playing: false }),
+      dance: () => dance(),
+      singalong: () => singAlong(),
+      pc: () => {
+        ctx.pc = { os: "Windows 11 Pro", cpu: "AMD Ryzen 7 9700X", cores: 16, cpu_load: 57, ram_used_gb: 9.4, ram_total_gb: 32, top_app: ["Chrome", 3.2], battery: [18, false] };
+        say(randomLine(mood, ctx));
+      },
+      // A fake window with him inside, shoved around and then still (tests the loose-in-a-window physics).
+      box: () => {
+        const b = { id: "demo", x: 250, y: 220, w: 520, h: 300 };
+        const el = document.createElement("div");
+        el.style.cssText = "position:absolute;border:3px solid #fff;border-radius:8px;box-sizing:border-box;z-index:1";
+        stageEl.append(el);
+        const draw = () => Object.assign(el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+        draw();
+        // ?boxkind=top: standing on its roof instead of inside it.
+        const kind = params.get("boxkind") === "top" ? "top" : "in";
+        const ledge = { id: `demo:${kind}`, x1: b.x, x2: b.x + b.w, y: kind === "top" ? b.y : b.y + b.h, anchor: b.x };
+        buddy.platforms = [ledge];
+        buddy.teleport(b.x + 200);
+        buddy.y = ledge.y - buddy.h;
+        buddy.standingOn = ledge;
+        buddy.hold(performance.now(), 20_000);
+        const start = performance.now();
+        const timer = window.setInterval(() => {
+          const t = (performance.now() - start) / 1000;
+          if (t > 6) return window.clearInterval(timer);
+          if (t < 1) return;
+          // 1-3 s: shoved left and right; 3-4.5 s: yanked up and down; then still.
+          if (t < 3) b.x = 250 + 260 * Math.sin((t - 1) * 5);
+          else if (t < 4.5) b.y = 220 - 100 * Math.sin((t - 3) * 7);
+          draw();
+          buddy.moveBox({ ...b }, kind, performance.now());
+        }, 16);
+      },
+      // A fake window dragged across the screen into him (tests getting hit by windows).
+      hit: () => {
+        const b = { id: "swing", app: "demo", x: -600, y: innerHeight - 420, w: 500, h: 320 };
+        const el = document.createElement("div");
+        el.style.cssText = "position:absolute;border:3px solid #fff;border-radius:8px;box-sizing:border-box;z-index:1";
+        stageEl.append(el);
+        buddy.teleport(innerWidth * 0.55);
+        buddy.hold(performance.now(), 20_000);
+        const timer = window.setInterval(() => {
+          const before = boxes;
+          b.x += 1100 / 60; // 1100 px/s
+          Object.assign(el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+          boxes = [{ ...b }];
+          hitByWindows(before, null, 1 / 60);
+          if (b.x > innerWidth) window.clearInterval(timer);
+        }, 1000 / 60);
+      },
       fakequit: () => {
         vanish();
         window.setTimeout(crashOut, 3000);

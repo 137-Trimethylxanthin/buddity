@@ -1,4 +1,8 @@
+mod appwindows;
 mod discord;
+mod music;
+mod pcinfo;
+mod tempo;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -194,6 +198,38 @@ fn discord_status(discord: tauri::State<discord::Discord>, status: Option<discor
     discord.set(status);
 }
 
+/// Facts about the computer (see pcinfo.rs). Reading processes takes a moment, so off the main thread.
+#[tauri::command]
+async fn pc_info(app: AppHandle) -> Result<pcinfo::PcInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<pcinfo::Pc>().info())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The song's tempo from Deezer, if it knows it (see tempo.rs).
+#[tauri::command]
+async fn song_bpm(title: String, artist: String, duration: Option<f64>) -> Option<f32> {
+    tempo::song_bpm(&title, &artist, duration).await
+}
+
+/// Turns watching where other apps' windows are on or off (the "windows" setting).
+#[tauri::command]
+fn set_app_windows(on: bool) {
+    appwindows::set_enabled(on);
+}
+
+/// Watch windows every frame while he stands on one (true), or a few times a second.
+#[tauri::command]
+fn app_windows_fast(on: bool) {
+    appwindows::set_fast(on);
+}
+
+/// Turns watching what music is playing on or off (the "music" setting).
+#[tauri::command]
+fn set_music(on: bool) {
+    music::set_enabled(on);
+}
+
 /// Opens the settings window, or brings it to the front if it's already open.
 /// Async: creating a window from a sync command can deadlock on Windows.
 #[tauri::command]
@@ -207,7 +243,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Verity settings")
-        .inner_size(360.0, 640.0)
+        .inner_size(360.0, 700.0)
         .resizable(false)
         .build()
         .map(|_| ())
@@ -249,6 +285,34 @@ mod linux {
     /// on every workspace and never takes keyboard focus. Plain Wayland windows
     /// can't be positioned or kept on top by the app itself.
     /// Returns false where layer-shell isn't available (X11, GNOME).
+    /// Moves the layer-shell overlay to the gdk monitor that matches the given one.
+    pub fn move_layer(window: &tauri::WebviewWindow, monitor: &tauri::Monitor) {
+        use gtk_layer_shell::LayerShell;
+
+        let (pos, size) = (*monitor.position(), *monitor.size());
+        let centre = (pos.x as f64 + size.width as f64 / 2.0, pos.y as f64 + size.height as f64 / 2.0);
+        let win = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            let Ok(gtk_window) = win.gtk_window() else { return };
+            let display = gtk_window.display();
+            // gdk works in logical pixels: compare centres, scaled, and take the closest.
+            let best = (0..display.n_monitors())
+                .filter_map(|i| display.monitor(i))
+                .min_by(|a, b| {
+                    let dist = |m: &gtk::gdk::Monitor| {
+                        let g = m.geometry();
+                        let s = m.scale_factor() as f64;
+                        let (cx, cy) = ((g.x() as f64 + g.width() as f64 / 2.0) * s, (g.y() as f64 + g.height() as f64 / 2.0) * s);
+                        (cx - centre.0).powi(2) + (cy - centre.1).powi(2)
+                    };
+                    dist(a).total_cmp(&dist(b))
+                });
+            if let Some(m) = best {
+                gtk_window.set_monitor(&m);
+            }
+        });
+    }
+
     pub fn try_layer_shell(window: &tauri::WebviewWindow) -> bool {
         use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
@@ -310,9 +374,145 @@ fn spawn_cursor_poll(app: AppHandle) {
 /// roam the whole desktop. Clicks pass through everywhere except her body.
 fn cover_screen(win: &WebviewWindow) {
     let Ok(Some(monitor)) = win.primary_monitor() else { return };
+    cover(win, &monitor);
+}
+
+fn cover(win: &WebviewWindow, monitor: &tauri::Monitor) {
     let area = monitor.work_area();
     let _ = win.set_position(PhysicalPosition::new(area.position.x, area.position.y));
     let _ = win.set_size(PhysicalSize::new(area.size.width, area.size.height));
+}
+
+// ---------- Several screens ----------
+// The window covers one screen at a time (a layer-shell overlay can't span
+// screens). When Verity crosses an edge into another screen, the window moves
+// there and he comes in from the matching edge.
+
+/// Whether the window is a layer-shell overlay (moved with set_monitor, not set_position).
+static LAYERED: AtomicBool = AtomicBool::new(false);
+/// Index into available_monitors() of the screen the window is on.
+static SCREEN: Mutex<Option<usize>> = Mutex::new(None);
+
+/// One click-through window per screen that draws Verity while he's crossing
+/// from one screen to the next (see src/mirror.ts). Only with several screens,
+/// and only where windows can be put on a given screen.
+fn spawn_mirrors(app: &AppHandle) {
+    let list = monitors(app);
+    if list.len() < 2 {
+        return;
+    }
+    let layered = LAYERED.load(Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    if !layered && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return; // GNOME on Wayland: windows can't be placed
+    }
+    for (i, monitor) in list.iter().enumerate() {
+        let label = format!("mirror-{i}");
+        if app.get_webview_window(&label).is_some() {
+            continue;
+        }
+        let Ok(win) = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("mirror.html".into()))
+            .title("Verity")
+            .transparent(true)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .shadow(false)
+            .focused(false)
+            .visible_on_all_workspaces(true)
+            .build()
+        else {
+            continue;
+        };
+        if layered {
+            #[cfg(target_os = "linux")]
+            {
+                linux::try_layer_shell(&win);
+                linux::move_layer(&win, monitor);
+                linux::apply_input_shape(&win, Vec::new()); // never catches the mouse
+            }
+        } else {
+            cover(&win, monitor);
+            let _ = win.set_ignore_cursor_events(true);
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct Screen {
+    /// The whole screen in physical pixels, in the desktop's layout.
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    scale: f64,
+    current: bool,
+    primary: bool,
+    /// A mirror window is on this screen, so he can be drawn here while crossing.
+    mirror: bool,
+    /// Physical y of the bottom of the usable area (above a bottom bar or taskbar): his floor.
+    floor: f64,
+}
+
+fn monitors(app: &AppHandle) -> Vec<tauri::Monitor> {
+    app.available_monitors().unwrap_or_default()
+}
+
+/// The screen the window is on: the last one moved to, else the one the window reports, else the primary.
+fn current_screen(app: &AppHandle, list: &[tauri::Monitor]) -> Option<usize> {
+    if let Some(i) = *SCREEN.lock().unwrap() {
+        if i < list.len() {
+            return Some(i);
+        }
+    }
+    let win = app.get_webview_window("main")?;
+    let on = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten())?;
+    list.iter().position(|m| m.position() == on.position() && m.size() == on.size())
+}
+
+#[tauri::command]
+fn screens(app: AppHandle) -> Vec<Screen> {
+    let list = monitors(&app);
+    let current = current_screen(&app, &list);
+    let primary = app.primary_monitor().ok().flatten();
+    list.iter()
+        .enumerate()
+        .map(|(i, m)| Screen {
+            x: m.position().x,
+            y: m.position().y,
+            w: m.size().width,
+            h: m.size().height,
+            scale: m.scale_factor(),
+            current: Some(i) == current,
+            primary: primary.as_ref().is_some_and(|p| p.position() == m.position() && p.size() == m.size()),
+            mirror: app.get_webview_window(&format!("mirror-{i}")).is_some(),
+            floor: appwindows::screen_floor(m.position().x, m.position().y).unwrap_or_else(|| {
+                let a = m.work_area();
+                a.position.y as f64 + a.size.height as f64
+            }),
+        })
+        .collect()
+}
+
+/// Moves the window onto another screen. Fails where the app can't place its window (GNOME on Wayland).
+#[tauri::command]
+fn move_to_screen(app: AppHandle, index: usize) -> Result<(), String> {
+    let list = monitors(&app);
+    let monitor = list.get(index).ok_or("no such screen")?;
+    let win = app.get_webview_window("main").ok_or("no window")?;
+    if LAYERED.load(Ordering::SeqCst) {
+        #[cfg(target_os = "linux")]
+        linux::move_layer(&win, monitor);
+    } else {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            return Err("this desktop doesn't let apps place their windows".into());
+        }
+        cover(&win, monitor);
+    }
+    *SCREEN.lock().unwrap() = Some(index);
+    Ok(())
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -374,19 +574,25 @@ pub fn run() {
         .manage(HitRegions::default())
         .manage(Input::spawn())
         .manage(discord::Discord::spawn())
-        .invoke_handler(tauri::generate_handler![set_hit_regions, get_username, get_uptime, cursor_to, discord_status, open_settings, scroll_active])
+        .manage(pcinfo::Pc::new())
+        .invoke_handler(tauri::generate_handler![set_hit_regions, get_username, get_uptime, cursor_to, discord_status, open_settings, scroll_active, pc_info, set_music, song_bpm, screens, move_to_screen, set_app_windows, app_windows_fast])
         .setup(|app| {
             build_tray(app)?;
             if let Some(win) = app.get_webview_window("main") {
                 #[cfg(target_os = "linux")]
                 let layered = linux::try_layer_shell(&win);
+                #[cfg(target_os = "linux")]
+                LAYERED.store(layered, Ordering::SeqCst);
                 #[cfg(not(target_os = "linux"))]
                 let layered = false;
                 if !layered {
                     cover_screen(&win);
                 }
             }
+            spawn_mirrors(app.handle());
             spawn_cursor_poll(app.handle().clone());
+            music::spawn(app.handle().clone());
+            appwindows::spawn(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

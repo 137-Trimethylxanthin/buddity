@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Asked when he first checks what Spotify or Music is playing (see src-tauri/src/music.rs). -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Verity looks at what Spotify or Music is playing so he can dance and sing along.</string>
+</dict>
+</plist>

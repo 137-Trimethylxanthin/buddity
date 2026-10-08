@@ -1,6 +1,6 @@
 [package]
 name = "verity"
-version = "0.3.1"
+version = "0.4.0"
 description = "Verity - an unofficial fan-made desktop assistant"
 edition = "2021"
 
@@ -22,8 +22,17 @@ serde_json = "1.0.151"
 uptime_lib = "0.3.1"
 tauri-plugin-single-instance = "2"
 discord-rich-presence = "1.1.0"
+sysinfo = "0.39"
+starship-battery = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 enigo = { version = "0.6", default-features = false, features = ["x11rb", "wayland"] }
+mpris = "2.1"
+x11rb = "0.13"
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62", features = ["Media_Control", "Foundation", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_System_Threading"] }

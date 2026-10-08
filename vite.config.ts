@@ -5,8 +5,8 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   clearScreen: false,
   build: {
-    // Two pages: the character overlay and the settings window.
-    rolldownOptions: { input: { main: "index.html", settings: "settings.html" } },
+    // The character overlay, the settings window, and the mirror on each screen.
+    rolldownOptions: { input: { main: "index.html", settings: "settings.html", mirror: "mirror.html" } },
   },
   server: {
     port: 1420,

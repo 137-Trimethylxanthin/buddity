@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { Setting } from "./store";
 import type { AccessoryId } from "./wardrobe";
+import type { FacePose } from "./face";
+import type { SkinId } from "./skins";
 
 export const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -78,4 +80,148 @@ export function sendWardrobe(worn: AccessoryId[]): void {
 
 export function onWardrobe(cb: (worn: AccessoryId[]) => void): void {
   if (inTauri) void listen<AccessoryId[]>("wardrobe", (e) => cb(e.payload));
+}
+
+/** A song a media player has loaded (see src-tauri/src/music.rs). */
+export interface Track {
+  title: string;
+  artist: string;
+  album: string;
+  /** Seconds, if known. */
+  duration: number | null;
+  /** Seconds into the song when it was read, if known. */
+  position: number | null;
+  playing: boolean;
+  /** The app playing it, e.g. "Spotify". */
+  player: string;
+}
+
+/** Watch what music is playing (the "music" setting). */
+export function setMusic(on: boolean): void {
+  if (inTauri) invoke("set_music", { on }).catch(() => {});
+}
+
+/** What's playing, every couple of seconds while something is; null once when it stops. */
+export function onMusic(cb: (track: Track | null) => void): void {
+  if (inTauri) void listen<Track | null>("music", (e) => cb(e.payload));
+}
+
+/** Facts about the computer (see src-tauri/src/pcinfo.rs). */
+export interface PcInfo {
+  os: string;
+  cpu: string;
+  cores: number;
+  /** Average CPU load in %, since the last call. */
+  cpu_load: number;
+  ram_used_gb: number;
+  ram_total_gb: number;
+  /** The app using the most memory and how much (GB). */
+  top_app: [string, number] | null;
+  /** Charge in % and whether it's charging; null without a battery. */
+  battery: [number, boolean] | null;
+}
+
+export async function getPcInfo(): Promise<PcInfo | null> {
+  return inTauri ? invoke<PcInfo>("pc_info").catch(() => null) : null;
+}
+
+/** The song's tempo from deezer.com, if it's known there. */
+export async function songBpm(t: Track): Promise<number | null> {
+  if (!inTauri) return null;
+  return invoke<number | null>("song_bpm", { title: t.title, artist: t.artist, duration: t.duration }).catch(() => null);
+}
+
+/** A screen in the desktop's layout, in physical pixels. */
+export interface Screen {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  scale: number;
+  /** The window is on this one. */
+  current: boolean;
+  primary: boolean;
+  /** A mirror window is on this screen, so he can be drawn here while crossing. */
+  mirror: boolean;
+  /** Physical y of the bottom of the usable area (his floor on this screen). */
+  floor: number;
+}
+
+export async function getScreens(): Promise<Screen[]> {
+  return inTauri ? invoke<Screen[]>("screens").catch(() => []) : [];
+}
+
+/** Move the window to another screen; false where that isn't possible. */
+export async function moveToScreen(index: number): Promise<boolean> {
+  if (!inTauri) return false;
+  return invoke("move_to_screen", { index }).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** One frame of Verity for the mirror windows; null when he's no longer crossing. */
+export interface MirrorFrame {
+  /** Counts crossings, so the character window knows when the mirrors are drawing this one. */
+  session: number;
+  /** The screen the character window is on (null while it's moving). */
+  owner: number | null;
+  /** The character window draws its own part; the mirror on its screen stays out of the way. */
+  ownerDraws: boolean;
+  skin: SkinId;
+  worn: AccessoryId[];
+  /** His element's classes (evil glow, dangling while held). */
+  cls: string;
+  /** Physical x of his box's left edge on the desktop. */
+  x: number;
+  /** Physical pixels from his box's bottom down to the floor of his screen. */
+  bottom: number;
+  pose: FacePose;
+}
+
+export function sendMirror(frame: MirrorFrame | null): void {
+  if (inTauri) void emit("mirror", frame);
+}
+
+export function onMirror(cb: (frame: MirrorFrame | null) => void): void {
+  if (inTauri) void listen<MirrorFrame | null>("mirror", (e) => cb(e.payload));
+}
+
+/** A mirror tells the character window it has drawn a frame of this crossing, on its screen. */
+export interface MirrorShown {
+  session: number;
+  screen: number;
+}
+
+export function sendMirrorShown(shown: MirrorShown): void {
+  if (inTauri) void emit("mirror-shown", shown);
+}
+
+export function onMirrorShown(cb: (shown: MirrorShown) => void): void {
+  if (inTauri) void listen<MirrorShown>("mirror-shown", (e) => cb(e.payload));
+}
+
+/** Another app's window: its app name (never its title) and where it is, in physical desktop pixels. */
+export interface AppWindow {
+  id: string;
+  app: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Watch where other apps' windows are (the "windows" setting). */
+export function setAppWindows(on: boolean): void {
+  if (inTauri) invoke("set_app_windows", { on }).catch(() => {});
+}
+
+/** The visible windows, front to back, whenever they change. */
+export function onAppWindows(cb: (windows: AppWindow[]) => void): void {
+  if (inTauri) void listen<AppWindow[]>("app-windows", (e) => cb(e.payload));
+}
+
+/** Check windows every frame while he's standing on one, so he moves smoothly with it. */
+export function appWindowsFast(on: boolean): void {
+  if (inTauri) invoke("app_windows_fast", { on }).catch(() => {});
 }

@@ -53,4 +53,14 @@ gl_Position = projectionMatrix * mvPosition;`,
   clear(): void {
     this.set(null, null, null, null);
   }
+
+  /** The walls as [minX, minY, maxX, maxY], to copy onto another Mold. */
+  get walls(): [number, number, number, number] {
+    return [this.min.value.x, this.min.value.y, this.max.value.x, this.max.value.y];
+  }
+
+  set walls([minX, minY, maxX, maxY]: [number, number, number, number]) {
+    this.min.value.set(minX, minY);
+    this.max.value.set(maxX, maxY);
+  }
 }

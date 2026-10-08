@@ -19,7 +19,7 @@ export function save(key: string, value: string): void {
 }
 
 /** On/off settings from the settings window. All default to on. */
-export type Setting = "sound" | "pester" | "autostart" | "jumpscare" | "discord";
+export type Setting = "sound" | "pester" | "autostart" | "jumpscare" | "discord" | "music" | "lyrics" | "screens" | "windows";
 
 export function setting(key: Setting): boolean {
   return load(key) !== "0";

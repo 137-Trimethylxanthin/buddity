@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the Verity character window and the settings window",
+  "description": "Permissions for the Verity character window, the settings window and the per-screen mirror windows",
   "windows": [
     "main",
-    "settings"
+    "settings",
+    "mirror-*"
   ],
   "permissions": [
     "core:default",

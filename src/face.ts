@@ -6,7 +6,7 @@ import type { Side, State } from "./buddy";
 import type { Mood } from "./lines";
 import type { Skin } from "./skins";
 import { buildAccessory, disposeAccessory } from "./accessories";
-import { accessory, type AccessoryId, type Slot } from "./wardrobe";
+import { ACCESSORIES, type AccessoryId, type Slot } from "./wardrobe";
 
 // The 3D character: scene, lights, a squash-and-stretch spring shared by every
 // body, and the expression state (eyes, mouth, mood). The body itself — the
@@ -59,6 +59,10 @@ const MAX_STRETCH = -0.3;
 const CONTACT_S = 0.5; // how long after a hit the body stays pressed against that surface
 const CORNER_S = 0.08; // two hits on neighbouring edges this close together squash him into the corner
 
+const DANCE_BPM = 120; // when the song's tempo isn't known
+const DANCE_BOP = 0.13; // squash on each beat
+const DANCE_SWAY = 0.2; // radians he leans side to side, one side per beat
+
 const CREEPY_TINT = new THREE.Color(0.75, 0.5, 0.45); // drained
 const SICK_TINT = new THREE.Color(0.5, 1, 0.4);
 
@@ -68,6 +72,19 @@ const SIDE_AXIS: Record<Side, { angle: number; contact: [number, number] }> = {
   left: { angle: Math.PI / 2, contact: [-1, 0] },
   right: { angle: Math.PI / 2, contact: [1, 0] },
 };
+
+/**
+ * Everything needed to draw the same frame of him in another window (a mirror
+ * on another screen): every object's transform in scene order, his expression,
+ * tint and mold walls. Only valid for a Face with the same skin and accessories.
+ */
+export interface FacePose {
+  /** position xyz, quaternion xyzw, scale xyz per object, in scene traversal order. */
+  transforms: number[];
+  look: { mood: Mood; eyes: Eyes; mouth: Mouth; grin: number };
+  tint: "sick" | "creepy" | null;
+  walls: [number, number, number, number];
+}
 
 /** What he's pressed against: a screen edge or both hands. snap skips the spring (frame-exact, for petting). */
 export type Press = { side: Side | "squeeze"; amount: number; snap?: boolean };
@@ -81,7 +98,10 @@ export class Face {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-  // root (contact offset + squash direction) › squash (scale) › unrotate › body
+  // groove (dance sway, pivoting at his bottom) › root (contact offset + squash
+  // direction) › squash (scale) › unrotate › body
+  private readonly groove = new THREE.Group();
+  private readonly grooveLift = new THREE.Group();
   private readonly root = new THREE.Group();
   private readonly squash = new THREE.Group();
   private readonly unrotate = new THREE.Group();
@@ -95,6 +115,7 @@ export class Face {
   private mood: Mood = "friendly";
   private grin = 1;
   private mouth: Mouth = "smile";
+  private eyes: Eyes = "open";
   private blinking = false;
   private eyesOverride: { eyes: Eyes; until: number } | null = null;
   private grinTimer = 0;
@@ -112,11 +133,16 @@ export class Face {
   private readonly mold = new Mold();
   private push: [number, number] | null = null; // px pushed into the screen edges (x right, y down)
   private readonly worn = new Map<AccessoryId, THREE.Object3D>();
+  private dancing = false;
+  private beat = 0; // beats danced so far
+  private beatSource: (() => number | null) | null = null;
 
   constructor(
     private readonly el: HTMLElement,
     private readonly baseSize: number,
     skin: Skin,
+    /** False for a mirror, which only draws poses it's given (no blinking of its own). */
+    alive = true,
   ) {
     this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -127,12 +153,21 @@ export class Face {
     this.scene.add(this.ambient, this.key, this.rim);
     this.light("friendly");
 
-    this.scene.add(this.root);
+    this.scene.add(this.groove);
+    this.groove.add(this.grooveLift);
+    this.grooveLift.add(this.root);
     this.root.add(this.squash);
     this.squash.add(this.unrotate);
 
     this.setSkin(skin);
-    this.scheduleBlink();
+    if (alive) this.scheduleBlink();
+  }
+
+  /** After moving to a screen with different scaling, render at its pixel density. */
+  refreshPixelRatio(): void {
+    if (this.renderer.getPixelRatio() === window.devicePixelRatio) return;
+    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.setSkin(this.skin); // resizes the canvas for the new ratio
   }
 
   /** Pixels per world unit: the base ball's radius on screen. */
@@ -169,7 +204,10 @@ export class Face {
       if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
     });
     this.unrotate.add(this.body.object);
-    for (const [id, obj] of this.worn) this.body.anchors[accessory(id)!.slot].add(obj); // dress the new body
+    const bottom = this.body.halfExtents[1];
+    this.groove.position.y = -bottom;
+    this.grooveLift.position.y = bottom;
+    this.dress(); // the new body
     this.refresh();
   }
 
@@ -189,7 +227,17 @@ export class Face {
         if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
       });
       this.worn.set(id, obj);
-      this.body.anchors[accessory(id)!.slot].add(obj);
+    }
+    this.dress();
+  }
+
+  /** (Re)attach what he wears, always in wardrobe order, so mirrors get the same scene layout. */
+  private dress(): void {
+    for (const a of ACCESSORIES) {
+      const obj = this.worn.get(a.id);
+      if (!obj) continue;
+      obj.removeFromParent();
+      this.body.anchors[a.slot].add(obj);
     }
   }
 
@@ -197,9 +245,49 @@ export class Face {
     const override = this.eyesOverride && this.time < this.eyesOverride.until ? this.eyesOverride.eyes : null;
     // Evil mode never blinks.
     const blink = this.blinking && this.skin.eyes === "open" && this.mood !== "creepy";
-    const eyes = override ?? (blink ? "closed" : this.skin.eyes);
-    this.body.setLook({ skin: this.skin, mood: this.mood, eyes, mouth: this.mouth, grin: this.grin });
+    this.eyes = override ?? (blink ? "closed" : this.skin.eyes);
+    this.body.setLook({ skin: this.skin, mood: this.mood, eyes: this.eyes, mouth: this.mouth, grin: this.grin });
     this.body.setTint(this.sick ? SICK_TINT : this.mood === "creepy" ? CREEPY_TINT : null);
+  }
+
+  /** This frame, for drawing him in another window. */
+  pose(): FacePose {
+    const transforms: number[] = [];
+    this.scene.traverse((o) => {
+      transforms.push(...o.position.toArray(), ...o.quaternion.toArray(), ...o.scale.toArray());
+    });
+    return {
+      transforms,
+      look: { mood: this.mood, eyes: this.eyes, mouth: this.mouth, grin: this.grin },
+      tint: this.sick ? "sick" : this.mood === "creepy" ? "creepy" : null,
+      walls: this.mold.walls,
+    };
+  }
+
+  /** Draw a frame taken from another Face with the same skin and accessories (a mirror). */
+  showPose(p: FacePose): void {
+    const objects: THREE.Object3D[] = [];
+    this.scene.traverse((o) => void objects.push(o));
+    if (objects.length * 10 !== p.transforms.length) return; // still dressing differently; skip this frame
+    objects.forEach((o, i) => {
+      const t = p.transforms.slice(i * 10, i * 10 + 10);
+      o.position.fromArray(t, 0);
+      o.quaternion.fromArray(t, 3);
+      o.scale.fromArray(t, 7);
+    });
+    if (p.look.mood !== this.mood) {
+      this.mood = p.look.mood;
+      this.light(this.mood);
+      this.el.classList.toggle("creepy", this.mood === "creepy");
+    }
+    const { eyes, mouth, grin } = p.look;
+    if (eyes !== this.eyes || mouth !== this.mouth || grin !== this.grin) {
+      [this.eyes, this.mouth, this.grin] = [eyes, mouth, grin];
+      this.body.setLook({ skin: this.skin, mood: this.mood, eyes, mouth, grin });
+    }
+    this.body.setTint(p.tint === "sick" ? SICK_TINT : p.tint === "creepy" ? CREEPY_TINT : null);
+    this.mold.walls = p.walls;
+    this.renderer.render(this.scene, this.camera);
   }
 
   /** Turn towards a position given in window CSS pixels. */
@@ -244,6 +332,16 @@ export class Face {
     this.push = push;
   }
 
+  /**
+   * Dance on the spot (to music): bop on the beat and sway side to side.
+   * beat gives the song's beat count when its tempo is known; otherwise he keeps his own 120 BPM.
+   */
+  setDance(on: boolean, beat: (() => number | null) | null = null): void {
+    if (on && !this.dancing) this.beat = 0;
+    this.dancing = on;
+    this.beatSource = beat;
+  }
+
   /** Green and queasy after being shaken. */
   setSick(on: boolean): void {
     this.sick = on;
@@ -284,6 +382,10 @@ export class Face {
       target = -0.08; // hangs a little when held
     } else if (m.state === "walk" || m.state === "exercise") {
       target = 0.04 * Math.abs(Math.sin(this.time * (m.state === "exercise" ? 16 : 9))); // wobbles as he moves
+    } else if (m.state === "idle" && this.dancing) {
+      // A bop on every beat: squash sharply, spring back up.
+      const phase = this.beat % 1;
+      target = DANCE_BOP * Math.max(0, Math.cos(Math.PI * phase)) ** 6;
     } else if (m.state === "idle") {
       target = 0.03 * Math.sin(this.time * 2.4); // breathing
     }
@@ -301,6 +403,11 @@ export class Face {
       this.sv += accel * dt;
       this.s = Math.max(MAX_STRETCH, Math.min(MAX_SQUASH, this.s + this.sv * dt));
     }
+
+    // Sway towards one side per beat, easing back to upright when he stops.
+    if (this.dancing) this.beat = this.beatSource?.() ?? this.beat + (dt * DANCE_BPM) / 60;
+    const sway = this.dancing ? DANCE_SWAY * Math.sin(Math.PI * this.beat) : 0;
+    this.groove.rotation.z += (sway - this.groove.rotation.z) * (1 - Math.exp(-dt * 14));
 
     this.root.rotation.z = this.axis;
     this.unrotate.rotation.z = -this.axis;

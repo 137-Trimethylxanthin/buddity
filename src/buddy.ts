@@ -35,7 +35,8 @@ export class Buddy {
   private holdUntil = 0;
   private grab = { dx: 0, dy: 0, lastX: 0, lastY: 0, lastT: 0 };
   /** While dragged into a screen edge: which edge and how many px past it. */
-  pressure: { side: Side; depth: number } | null = null;
+  /** How far he's being pushed into the screen edges while dragged, in px (x right, y down). Corners push on both. */
+  pressure: { x: number; y: number } | null = null;
 
   constructor(
     public w: number,
@@ -199,6 +200,13 @@ export class Buddy {
     else this.resumeWalk = true;
   }
 
+  /** Stop rolling where he is and forget where he was going. */
+  stop(now: number): void {
+    this.onArrive = null;
+    this.resumeWalk = false;
+    if (this.state === "walk") this.rest(now, 1500);
+  }
+
   /** Stand on a platform (the treadmill) with his centre at x. */
   standOn(x: number, platformHeight: number): void {
     this.onArrive = null;
@@ -239,14 +247,9 @@ export class Buddy {
     const maxX = innerWidth - this.w;
     this.x = Math.max(0, Math.min(maxX, wantX));
     this.y = Math.max(0, Math.min(this.floor, wantY));
-    const pushes: { side: Side; depth: number }[] = [
-      { side: "left", depth: -wantX },
-      { side: "right", depth: wantX - maxX },
-      { side: "ceiling", depth: -wantY },
-      { side: "floor", depth: wantY - this.floor },
-    ];
-    const hardest = pushes.reduce((a, b) => (b.depth > a.depth ? b : a));
-    this.pressure = hardest.depth > 0 ? hardest : null;
+    const x = wantX < 0 ? wantX : wantX > maxX ? wantX - maxX : 0;
+    const y = wantY < 0 ? wantY : wantY > this.floor ? wantY - this.floor : 0;
+    this.pressure = x || y ? { x, y } : null;
   }
 
   release(): void {

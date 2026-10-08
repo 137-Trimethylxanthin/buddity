@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { Mold } from "./mold";
 import { BallBody } from "./ball";
 import { BlobBody } from "./blob";
 import type { Side, State } from "./buddy";
@@ -50,6 +51,7 @@ const SPRING_DAMP = 9;
 const MAX_SQUASH = 0.45;
 const MAX_STRETCH = -0.3;
 const CONTACT_S = 0.5; // how long after a hit the body stays pressed against that surface
+const CORNER_S = 0.08; // two hits on neighbouring edges this close together squash him into the corner
 
 const CREEPY_TINT = new THREE.Color(0.75, 0.5, 0.45); // drained
 const SICK_TINT = new THREE.Color(0.5, 1, 0.4);
@@ -60,6 +62,14 @@ const SIDE_AXIS: Record<Side, { angle: number; contact: [number, number] }> = {
   left: { angle: Math.PI / 2, contact: [-1, 0] },
   right: { angle: Math.PI / 2, contact: [1, 0] },
 };
+
+/** What he's pressed against: a screen edge or both hands. snap skips the spring (frame-exact, for petting). */
+export type Press = { side: Side | "squeeze"; amount: number; snap?: boolean };
+
+/** Squash axis for a contact direction: squashing towards the floor is angle 0. */
+function axisOf([cx, cy]: [number, number]): number {
+  return Math.atan2(cx, -cy);
+}
 
 export class Face {
   private readonly renderer: THREE.WebGLRenderer;
@@ -91,7 +101,10 @@ export class Face {
   private axis = 0;
   private contact: [number, number] = [0, -1];
   private contactUntil = 0;
-  private press: { side: Side | "squeeze"; amount: number } | null = null;
+  private lastHit = -Infinity;
+  private press: Press | null = null;
+  private readonly mold = new Mold();
+  private push: [number, number] | null = null; // px pushed into the screen edges (x right, y down)
 
   constructor(
     private readonly el: HTMLElement,
@@ -144,6 +157,9 @@ export class Face {
       this.body.dispose();
     }
     this.body = skin.body === "blob" ? new BlobBody(skin, this.ppu) : new BallBody(skin, this.ppu);
+    this.body.object.traverse((o) => {
+      if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
+    });
     this.unrotate.add(this.body.object);
     this.refresh();
   }
@@ -169,19 +185,34 @@ export class Face {
   /** A hit against a screen edge: squash against it, harder for faster hits. */
   impact(side: Side, speed: number): void {
     const { angle, contact } = SIDE_AXIS[side];
-    this.axis = angle;
-    this.contact = contact;
+    const [px, py] = this.contact;
+    if (this.time - this.lastHit < CORNER_S && px * contact[0] + py * contact[1] === 0) {
+      // Hit two neighbouring edges at once: squash diagonally into the corner.
+      const c: [number, number] = [(px + contact[0]) / Math.SQRT2, (py + contact[1]) / Math.SQRT2];
+      this.contact = c;
+      this.axis = axisOf(c);
+    } else {
+      this.axis = angle;
+      this.contact = contact;
+    }
+    this.lastHit = this.time;
     this.contactUntil = this.time + CONTACT_S;
     this.sv += Math.min(10, speed / 200) * this.skin.squish;
     this.body.impact(speed);
   }
 
   /**
-   * Squash him on purpose: pushed into a screen edge while dragged, or squeezed
-   * by holding the mouse on him. amount is 0..1; null lets go (he springs back).
+   * Squash him on purpose: pushed into a screen edge or corner while dragged,
+   * patted, or squeezed by holding the mouse on him. amount is 0..1; null lets
+   * go (he springs back).
    */
-  setPress(press: { side: Side | "squeeze"; amount: number } | null): void {
+  setPress(press: Press | null): void {
     this.press = press;
+  }
+
+  /** Pushed this far (px, x right, y down) into the screen edges while dragged: he molds into them. */
+  setPush(push: [number, number] | null): void {
+    this.push = push;
   }
 
   /** Green and queasy after being shaken. */
@@ -232,9 +263,15 @@ export class Face {
       this.contact = [0, -1];
     }
 
-    const accel = -SPRING_K * (this.s - target) - SPRING_DAMP * this.sv;
-    this.sv += accel * dt;
-    this.s = Math.max(MAX_STRETCH, Math.min(MAX_SQUASH, this.s + this.sv * dt));
+    if (this.push) target = 0; // molding instead, below
+    if (this.press?.snap) {
+      this.s = target;
+      this.sv = 0;
+    } else {
+      const accel = -SPRING_K * (this.s - target) - SPRING_DAMP * this.sv;
+      this.sv += accel * dt;
+      this.s = Math.max(MAX_STRETCH, Math.min(MAX_SQUASH, this.s + this.sv * dt));
+    }
 
     this.root.rotation.z = this.axis;
     this.unrotate.rotation.z = -this.axis;
@@ -243,12 +280,48 @@ export class Face {
     // Keep the squashed side pressed against the surface it's touching.
     const grounded = m.state === "idle" || m.state === "walk" || m.state === "exercise";
     if (touching || grounded) {
+      // The squashed body is an ellipse: short along the contact direction, wide across
+      // it. Shift it so it still touches each wall it's pressed against (both, in a corner).
       const [cx, cy] = this.contact;
-      const extent = cx !== 0 ? this.body.halfExtents[0] : this.body.halfExtents[1];
-      this.root.position.set(cx * this.s * extent, cy * this.s * extent, 0);
+      const [hx, hy] = this.body.halfExtents;
+      const along = Math.hypot(cx * hx, cy * hy) * (1 - this.s);
+      const across = Math.hypot(cy * hx, cx * hy) * (1 + this.s * 0.6);
+      const reach = (n: number, t: number) => Math.hypot(along * n, across * t);
+      const ox = cx ? Math.sign(cx) * (hx - reach(cx, cy)) : 0;
+      const oy = cy ? Math.sign(cy) * (hy - reach(cy, cx)) : 0;
+      this.root.position.set(ox, oy, 0);
     } else {
       this.root.position.set(0, 0, 0);
     }
+    this.updateMold();
+  }
+
+  /** Pushed into edges: slide into them and flatten against each wall, bulging a little. */
+  private updateMold(): void {
+    if (!this.push) return this.mold.clear();
+    // The walls are the edges of his box (the screen edges he's pinned to), in world units.
+    const bx = (this.baseSize * this.skin.shape[0]) / 2 / this.ppu;
+    const by = (this.baseSize * this.skin.shape[1]) / 2 / this.ppu;
+    const cap = 0.55 * Math.min(bx, by);
+    let px = this.push[0] / this.ppu;
+    let py = -this.push[1] / this.ppu; // world y is up
+    const len = Math.hypot(px, py);
+    if (len > cap) {
+      px *= cap / len;
+      py *= cap / len;
+    }
+    // He turns his face away from the walls he's squashed into.
+    const k = Math.min(1, len / cap);
+    this.look.setFromEuler(
+      new THREE.Euler(-Math.sign(this.push[1]) * LOOK_PITCH * k, -Math.sign(this.push[0]) * LOOK_YAW * k, 0),
+    );
+    this.axis = 0;
+    this.root.rotation.z = 0;
+    this.unrotate.rotation.z = 0;
+    this.root.position.set(px, py, 0);
+    const bulge = 1 + 0.18 * k;
+    this.squash.scale.set(bulge, bulge, bulge);
+    this.mold.set(px < 0 ? -bx : null, px > 0 ? bx : null, py < 0 ? -by : null, py > 0 ? by : null);
   }
 
   /** Normal daylight, or evil mode's red light from below (flashlight-under-the-chin). */

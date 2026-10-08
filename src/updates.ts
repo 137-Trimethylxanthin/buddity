@@ -34,3 +34,8 @@ export async function setAutostart(on: boolean): Promise<void> {
   if (!live) return;
   await (on ? enable() : disable());
 }
+
+/** Whether autostart is on; unlike autostartEnabled, errors are passed on. */
+export async function autostartState(): Promise<boolean> {
+  return isEnabled();
+}

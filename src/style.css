@@ -45,6 +45,7 @@ body {
 /* The canvas is larger than the hit box so squash and stretch aren't clipped. */
 #verity canvas { position: absolute; pointer-events: none; }
 #verity.drag { animation: dangle 0.5s ease-in-out infinite alternate; }
+#verity.drag.squished { animation: none; }
 #verity.hover { transform: scale(1.04); }
 
 @keyframes dangle {
@@ -295,3 +296,14 @@ body {
   cursor: pointer;
 }
 #bubble-choices button:hover { background: #fff27a; }
+
+/* ---------- PetPet hand (right click) ---------- */
+#hand {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3; /* over his head */
+  pointer-events: none;
+  display: none;
+}
+#hand.on { display: block; }

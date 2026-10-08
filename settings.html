@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verity settings</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fffbea;
+        --fg: #2b2410;
+        --muted: #7a6c45;
+        --line: #eadfb8;
+        --accent: #f2c200;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1d1a12;
+          --fg: #f3ecd3;
+          --muted: #a89a72;
+          --line: #3a3423;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.4 system-ui, sans-serif;
+        user-select: none;
+      }
+      h1 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+      label {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 12px 0;
+        border-top: 1px solid var(--line);
+        cursor: pointer;
+      }
+      label[hidden] {
+        display: none;
+      }
+      input {
+        margin: 2px 0 0;
+        width: 18px;
+        height: 18px;
+        accent-color: var(--accent);
+        flex: none;
+      }
+      .update {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+      button {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--accent);
+        color: #2b2410;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      small {
+        display: block;
+        color: var(--muted);
+      }
+    </style>
+    <script type="module" src="/src/settings.ts"></script>
+  </head>
+  <body>
+    <h1>Verity settings 💛</h1>
+    <label><input type="checkbox" data-key="sound" /><span>Sound<small>His voice, songs and noises.</small></span></label>
+    <label><input type="checkbox" data-key="pester" /><span>Pester<small>Ignore him for 5 minutes and he pushes your cursor around and scrolls your page.</small></span></label>
+    <label><input type="checkbox" data-key="autostart" /><span>Start with PC<small>He starts when you log in.</small></span></label>
+    <label><input type="checkbox" data-key="discord" /><span>Discord status<small>Shows "Verity" on your Discord profile while he's running.</small></span></label>
+    <label hidden><input type="checkbox" data-key="jumpscare" /><span>Crashout jumpscare<small>When he comes back after you "closed" him, he zooms at you.</small></span></label>
+    <div class="update">
+      <button id="check-update" type="button">Check for updates</button>
+      <small id="update-status"></small>
+    </div>
+  </body>
+</html>

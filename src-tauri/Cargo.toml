@@ -1,6 +1,6 @@
 [package]
 name = "verity"
-version = "0.2.1"
+version = "0.3.0"
 description = "Verity - an unofficial fan-made desktop assistant"
 edition = "2021"
 
@@ -19,6 +19,9 @@ tauri-plugin-autostart = "2.7.0"
 tauri-plugin-updater = "2.13.2"
 tauri-plugin-process = "2.4.0"
 serde_json = "1.0.151"
+uptime_lib = "0.3.1"
+tauri-plugin-single-instance = "2"
+discord-rich-presence = "1.1.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

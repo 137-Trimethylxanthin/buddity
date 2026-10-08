@@ -1,0 +1,29 @@
+// Preferences saved in localStorage, shared by the character and settings windows.
+// Storage can be unavailable, so every access is guarded.
+
+export function load(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function save(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* not persisted */
+  }
+}
+
+/** On/off settings from the settings window. All default to on. */
+export type Setting = "sound" | "pester" | "autostart" | "jumpscare" | "discord";
+
+export function setting(key: Setting): boolean {
+  return load(key) !== "0";
+}
+
+export function saveSetting(key: Setting, on: boolean): void {
+  save(key, on ? "1" : "0");
+}

@@ -19,7 +19,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Create the release once, up front. It must point at a commit in the
+  # releases repo (its main branch), not at this repo's commit.
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      REPO: 137-Trimethylxanthin/releases
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create verity-vX.Y.Z in the releases repo
+        run: |
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          gh release view "verity-v$VERSION" -R "$REPO" >/dev/null 2>&1 || gh release create "verity-v$VERSION" -R "$REPO" \
+            --target main --title "Verity v$VERSION" \
+            --notes "Download the installer for your system below. Already installed? Verity updates himself."
+
   build:
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +79,6 @@ jobs:
           repo: releases
           tagName: verity-v__VERSION__
           releaseName: Verity v__VERSION__
-          releaseBody: "Download the installer for your system below. Already installed? Verity updates himself."
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

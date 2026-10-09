@@ -14,14 +14,16 @@ Runs on **Windows, Linux and macOS**. Download the newest `verity-v…` release 
 | Drag into a screen edge or corner | Squishes against it |
 | Shake while dragging | Gets sick (Obesity pukes) |
 | Hold **both** mouse buttons on him | Gets squeezed |
-| Right-click (or middle-click) | Menu around him: talk (sometimes he asks you a quiz), sing, feed, treadmill, evil mode, wardrobe & skins, settings |
+| Right-click (or middle-click) | Menu around him: talk (sometimes he asks you a quiz), sing, feed, treadmill, microphone, chain, evil mode, wardrobe & skins, settings |
 
 Hover over him for a moment and a little tag reminds you of all this.
 
+- **Microphone:** right-click → 🎤 Microphone. He holds a mic and sings along to whatever you're playing, wherever he is: every line of the lyrics when "Sing along" finds them, otherwise he hums to the beat. Right-click → Put the mic down to stop.
+- **Chain:** right-click → ⛓ Chain puts a chain round him, bolted to the floor next to him. Drag the bolt anywhere (drop it on a window and it moves with that window), scroll on it to make the chain longer or shorter. He can't get any further than the chain lets him: he stops at its end, swings when thrown, and dangles if you hang the bolt up high. Right-click → Unchain sets him free. He remembers both after a restart.
 - **Food:** feed normal Verity 3 pieces and he turns into Obesity. The **treadmill** slims him back down.
 - **Skins:** Verity, Falsity, Lovity, Obesity, Freakity, Goonity. Pick one in Settings (right-click → 👒 Wardrobe & skins).
 - **Wardrobe:** right-click → 👒 Wardrobe & skins: the Master Verity hat, a bow, a crown, a party hat, devil horns, a halo, sunglasses and a bow tie. One hat, one pair of glasses and one neck thing at a time; he keeps them on when you switch skins.
-- **Your windows:** the tops of your windows are ledges he stands and rolls on, and he can go inside a window and stand on its bottom edge. Move or resize the window and he's thrown around in it (or on it): its walls are solid and gravity pulls him. Drag a window into him fast and he gets knocked flying. He knows which app's window he's in front of or on top of, and now and then goes to visit one. On the window of the app that's playing music he dances and sings every line until you move him off. He only sees app names and where windows are, never titles or what's in them. Works on Windows, macOS, X11 and Hyprland (other Wayland desktops don't let apps see windows). Turn it off with "Climb windows" in Settings.
+- **Your windows:** the tops of your windows are ledges he stands and rolls on, and he can go inside a window and stand on its bottom edge. Move or resize the window and he's thrown around in it (or on it): its walls are solid and gravity pulls him. Drag a window into him fast and he gets knocked flying. He knows which app's window he's in front of or on top of, and now and then goes to visit one. On the window of the app that's playing music he dances and sings every line until you move him off. On Windows, the Start menu, Search and the notification center count too: one popping open on top of him shoves him out of the way. He only sees app names and where windows are, never titles or what's in them. Works on Windows, macOS, X11 and Hyprland (other Wayland desktops don't let apps see windows). Turn it off with "Climb windows" in Settings.
 - **Several screens:** screens side by side are one big floor. He walks, rolls, gets thrown and dragged straight across the edges between them, half on one screen and half on the other while he crosses. He starts on the screen he was last on. Turn it off with "All screens" in Settings. This adds one invisible, click-through window per screen. Not on GNOME's Wayland session, which doesn't let apps place their windows.
 - **Evil mode:** right-click → 😈 Get creepy. Also switches on by itself between midnight and 4 a.m.
 - **Push my cursor when ignored:** ignore him for 5 minutes and he pushes your cursor across the screen (shake your mouse hard to break free) and rolls on the spot to scroll the window he's in. You can turn this off in Settings.
@@ -39,6 +41,7 @@ Needs [Bun](https://bun.sh), Rust, and on Linux `webkit2gtk-4.1` and `gtk-layer-
 bun install
 bun run tauri dev      # run with hot reload
 bun run dev            # just the character in a browser (http://localhost:1420/?skin=obesity)
+bun run test           # unit tests (physics, the chain, window coordinates)
 ```
 
 To test the fake quit without waiting: `VERITY_FAKE_QUIT_CHANCE=1 VERITY_FAKE_QUIT_SECS=20 bun run tauri dev`, or `?do=fakequit` in the browser.

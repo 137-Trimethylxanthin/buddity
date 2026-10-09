@@ -13,6 +13,8 @@ const KNOCK = 1.3; // hit by a window: flies off a bit faster than it was going
 const KNOCK_POP = 280; // px/s up, so a sideways hit sends him arcing
 const RELEASE_GRACE_MS = 30; // let go within this long of the last mouse move: a full throw
 const RELEASE_FADE_MS = 40; // after that the throw fades out (gone after ~150 ms of holding still)
+const SWING_DAMPING = 0.5; // per second, swinging on a taut chain: he comes to hang still
+const DANGLE_SPEED = 150; // px/s: swinging slower than this on a taut chain, he's just hanging there
 
 export type State = "idle" | "walk" | "fall" | "drag" | "exercise";
 
@@ -86,10 +88,14 @@ export class Buddy {
   standingOn: Platform | null = null;
   /** While the window he's inside moves or is resized, he's loose in it: its walls are solid. */
   container: Container | null = null;
+  /** Chained to an anchor (window px): his middle never gets further than len from it. */
+  tether: { x: number; y: number; len: number } | null = null;
 
   private targetX = 0;
   private resumeWalk = false;
   private onArrive: (() => void) | null = null;
+  /** The errand's sender wants to hear if his chain stops him short. */
+  private onAbandon: (() => void) | null = null;
   private idleUntil = 0;
   private holdUntil = 0;
   private grab = { dx: 0, dy: 0, lastX: 0, lastY: 0, lastT: 0 };
@@ -169,6 +175,7 @@ export class Buddy {
       if (!moving) return;
       this.container = { ...b, kind, vLeft: 0, vRight: 0, vTop: 0, vBottom: 0, at: now, movedAt: now };
       this.onArrive = null;
+      this.onAbandon = null;
       this.resumeWalk = false;
       this.set("fall");
       return;
@@ -176,7 +183,8 @@ export class Buddy {
     if (moving) {
       // Speed of each edge, smoothed a little (resizing moves one edge, not the others).
       const dt = Math.max(0.008, (now - c.at) / 1000);
-      const blend = (v: number, d: number) => v * 0.3 + (d / dt) * 0.7;
+      // An edge that jumps (maximised, snapped, restored) is put there, not swung: it pushes no faster than a throw.
+      const blend = (v: number, d: number) => v * 0.3 + Math.max(-MAX_THROW, Math.min(MAX_THROW, d / dt)) * 0.7;
       c.vLeft = blend(c.vLeft, b.x - c.x);
       c.vRight = blend(c.vRight, b.x + b.w - (c.x + c.w));
       c.vTop = blend(c.vTop, b.y - c.y);
@@ -194,6 +202,7 @@ export class Buddy {
     if (this.state === "drag" || this.state === "exercise") return;
     this.container = null;
     this.onArrive = null;
+    this.onAbandon = null;
     this.resumeWalk = false;
     if (Math.abs(vx) >= Math.abs(vy)) {
       this.x = vx > 0 ? by.x + by.w : by.x - this.w;
@@ -204,7 +213,16 @@ export class Buddy {
     }
     this.vx = vx * KNOCK;
     this.vy = Math.min(vy * KNOCK, -KNOCK_POP);
+    this.capSpeed();
     this.set("fall");
+  }
+
+  /** No faster than the hardest throw (a window that jumps across the screen in one update isn't a bat). */
+  private capSpeed(): void {
+    const speed = Math.hypot(this.vx, this.vy);
+    if (speed <= MAX_THROW) return;
+    this.vx *= MAX_THROW / speed;
+    this.vy *= MAX_THROW / speed;
   }
 
   /** The window he was loose in is gone. */
@@ -232,7 +250,11 @@ export class Buddy {
     const left = c.x;
     const right = c.x + c.w - this.w;
     const top = c.y;
-    const bottom = c.y + c.h - this.h;
+    // A window reaching past the taskbar's edge (a maximised one's frame does, by a few px): he stops
+    // on the floor, which stays put however the window moves.
+    const sunk = c.y + c.h - this.h > this.floor;
+    const bottom = sunk ? this.floor : c.y + c.h - this.h;
+    const vBottom = sunk ? 0 : c.vBottom;
     if (this.x < left) {
       this.x = left;
       const rel = this.vx - c.vLeft;
@@ -259,19 +281,20 @@ export class Buddy {
     }
     if (this.y >= bottom) {
       this.y = bottom;
-      const rel = this.vy - c.vBottom;
+      const rel = this.vy - vBottom;
       if (rel > 0) {
         if (rel > MIN_IMPACT) this.onImpact("floor", rel);
-        this.vy = rel > MIN_BOUNCE_VY ? c.vBottom - rel * this.physics.bounce : c.vBottom;
+        this.vy = rel > MIN_BOUNCE_VY ? vBottom - rel * this.physics.bounce : vBottom;
       }
       // Rolling along the bottom slows down to the window's own speed.
       const carry = (c.vLeft + c.vRight) / 2;
       this.vx = carry + (this.vx - carry) * Math.exp(-dt * 3);
       // The window has been still for a moment and he's resting on its bottom: back to standing.
-      if (now - c.movedAt > BOX_SETTLE_MS && Math.abs(this.vy - c.vBottom) < 1 && Math.abs(this.vx - carry) < 20) {
+      if (now - c.movedAt > BOX_SETTLE_MS && Math.abs(this.vy - vBottom) < 1 && Math.abs(this.vx - carry) < 20) {
         this.settle(c, c.y + c.h, now);
       }
     }
+    this.capSpeed(); // walls that jumped (snapped, maximised) push no faster than a throw
   }
 
   /** On top of a moving window: its top edge is a floor that moves; he can fly off it or roll off its ends. */
@@ -307,7 +330,7 @@ export class Buddy {
     this.vx = this.vy = 0;
     const mid = this.x + this.w / 2;
     this.standingOn = this.platforms.find((p) => p.id === `${c.id}:${c.kind}` && mid >= p.x1 && mid <= p.x2) ?? null;
-    this.y = y - this.h;
+    this.y = this.standingOn ? y - this.h : Math.min(y - this.h, this.floor);
     this.land(now);
   }
 
@@ -335,6 +358,7 @@ export class Buddy {
     const vy = Math.sqrt(2 * GRAVITY * apex);
     const t = vy / GRAVITY + Math.sqrt((2 * (apex - rise)) / GRAVITY);
     this.onArrive = null;
+    this.onAbandon = null;
     this.resumeWalk = false;
     this.vx = (x - (this.x + this.w / 2)) / t;
     this.vy = -vy;
@@ -374,16 +398,109 @@ export class Buddy {
     switch (this.state) {
       case "drag":
       case "exercise":
-        return;
+        break;
       case "fall":
-        return this.fall(dt, now);
+        this.fall(dt, now);
+        break;
       case "walk":
-        return this.walk(dt, now);
+        this.walk(dt, now);
+        break;
       case "idle":
         if (this.y < this.ground - 1) this.set("fall"); // screen resized under us, or his ledge moved
+        else if (this.y > this.ground + 1) this.y = this.ground; // or shrank: never left below the floor
         else if (now >= this.idleUntil && now >= this.holdUntil) this.wander();
-        return;
+        break;
     }
+    this.tie(dt, now);
+  }
+
+  /** How far the chain lets his middle get from the anchor sideways, standing with his top at y. Null: not chained. */
+  private reach(y = this.ground): number | null {
+    const t = this.tether;
+    if (!t) return null;
+    const dy = y + this.h / 2 - t.y;
+    return Math.sqrt(Math.max(0, t.len * t.len - dy * dy));
+  }
+
+  /** Hanging from his chain, nearly still (he faces you again, like standing). */
+  get dangling(): boolean {
+    const t = this.tether;
+    if (!t || this.state !== "fall") return false;
+    const d = Math.hypot(this.x + this.w / 2 - t.x, this.y + this.h / 2 - t.y);
+    return d >= t.len - 1 && Math.hypot(this.vx, this.vy) < DANGLE_SPEED;
+  }
+
+  /** Whether his chain lets him get to x (his middle), standing with his top at y (the floor unless given). */
+  canReach(x: number, y = this.floor): boolean {
+    const r = this.reach(y);
+    if (r === null) return true;
+    const t = this.tether!;
+    return Math.abs(y + this.h / 2 - t.y) <= t.len && Math.abs(x - t.x) <= r;
+  }
+
+  /** x (his left edge), kept to where his chain lets him stand. */
+  private withinReach(x: number): number {
+    const r = this.reach();
+    if (r === null) return x;
+    const t = this.tether!;
+    return Math.max(t.x - r - this.w / 2, Math.min(t.x + r - this.w / 2, x));
+  }
+
+  /** The chain pulls him back to its length: no further out, and no speed outwards (so he swings). */
+  private tie(dt: number, now: number): void {
+    const t = this.tether;
+    if (!t || this.state === "exercise") return;
+    const dx = this.x + this.w / 2 - t.x;
+    const dy = this.y + this.h / 2 - t.y;
+    const d = Math.hypot(dx, dy);
+    if (!(d > t.len)) return; // within reach (or the anchor is nowhere: NaN)
+    // On his feet: pulled along what he's standing on to the end of the chain, if it reaches that far.
+    const reach = this.grounded ? this.reach() : null;
+    if (reach !== null && Math.abs(this.ground + this.h / 2 - t.y) <= t.len) {
+      this.x = t.x + (Math.sign(dx) || 1) * reach - this.w / 2;
+      this.y = this.ground;
+      const on = this.standingOn;
+      const mid = this.x + this.w / 2;
+      if (on && (mid < on.x1 || mid > on.x2)) {
+        // Pulled off the end of his ledge: he drops (and doesn't get where he was going).
+        this.endErrand();
+        this.vx = this.vy = 0;
+        this.set("fall");
+      } else if (this.state === "walk") {
+        // The end of his chain: as far as he goes. He doesn't get where he was going.
+        this.endErrand();
+        this.rest(now, 2000 + Math.random() * 2000);
+      }
+      return;
+    }
+    const nx = dx / d;
+    const ny = dy / d;
+    this.x = t.x + nx * t.len - this.w / 2;
+    this.y = t.y + ny * t.len - this.h / 2;
+    if (this.state === "drag") return;
+    const out = this.vx * nx + this.vy * ny;
+    if (out > 0) {
+      this.vx -= out * nx;
+      this.vy -= out * ny;
+    }
+    if (this.state === "fall") {
+      const keep = Math.exp(-SWING_DAMPING * dt);
+      this.vx *= keep;
+      this.vy *= keep;
+    } else {
+      // Pulled up off the ground (the anchor is up high): he dangles, and doesn't get where he was going.
+      this.endErrand();
+      this.set("fall");
+    }
+  }
+
+  /** His chain stopped him short: whatever he was on his way to do is off (whoever sent him hears about it). */
+  private endErrand(): void {
+    const abandoned = this.onArrive && this.onAbandon;
+    this.onArrive = null;
+    this.onAbandon = null;
+    this.resumeWalk = false;
+    abandoned?.();
   }
 
   private fall(dt: number, now: number): void {
@@ -449,12 +566,14 @@ export class Buddy {
   private arrive(now: number): void {
     const done = this.onArrive;
     this.onArrive = null;
+    this.onAbandon = null;
     this.resumeWalk = false;
     this.rest(now, 1500);
     done?.();
   }
 
   private walk(dt: number, now: number): void {
+    if (this.y > this.ground + 1) this.y = this.ground; // never walking about below the floor
     const dir = Math.sign(this.targetX - this.x);
     this.x += dir * this.physics.walkSpeed * dt;
     const on = this.standingOn;
@@ -490,7 +609,8 @@ export class Buddy {
     const minX = on ? on.x1 - this.w / 2 + 10 : Math.max(this.minX, 0);
     const wanted = this.chooseTarget?.();
     const target = wanted ?? this.x + (Math.random() - 0.5) * 700;
-    this.targetX = Math.max(minX, Math.min(maxX, target));
+    this.targetX = this.withinReach(Math.max(minX, Math.min(maxX, target)));
+    if (Math.abs(this.targetX - this.x) < 8) return this.rest(performance.now(), 2500 + Math.random() * 4000); // chained up short
     this.set("walk");
   }
 
@@ -516,23 +636,24 @@ export class Buddy {
   }
 
   /** Walk (rolling) so his centre ends up at x, then call onArrive. */
-  seek(x: number, onArrive: () => void): void {
+  seek(x: number, onArrive: () => void, onAbandon: (() => void) | null = null): void {
     this.targetX = Math.max(this.minX, Math.min(this.maxX, x - this.w / 2));
     this.onArrive = onArrive;
+    this.onAbandon = onAbandon;
     if (this.grounded) this.set("walk");
     else this.resumeWalk = true;
   }
 
   /** Stop rolling where he is and forget where he was going. */
   stop(now: number): void {
-    this.onArrive = null;
-    this.resumeWalk = false;
+    this.endErrand(); // whoever sent him hears he isn't going (a cursor he was pushing is let go)
     if (this.state === "walk") this.rest(now, 1500);
   }
 
   /** Stand on a platform (the treadmill) with his centre at x. */
   standOn(x: number, platformHeight: number): void {
     this.onArrive = null;
+    this.onAbandon = null;
     this.vx = this.vy = 0;
     this.x = x - this.w / 2;
     this.y = innerHeight - platformHeight - this.h;
@@ -549,6 +670,7 @@ export class Buddy {
 
   startDrag(px: number, py: number, now: number): void {
     this.onArrive = null;
+    this.onAbandon = null;
     this.grab = { dx: px - this.x, dy: py - this.y, lastX: px, lastY: py, lastT: now };
     this.vx = this.vy = 0;
     this.resumeWalk = false;
@@ -573,6 +695,7 @@ export class Buddy {
     const x = wantX < minX ? wantX - minX : wantX > maxX ? wantX - maxX : 0;
     const y = wantY < 0 ? wantY : wantY > this.floor ? wantY - this.floor : 0;
     this.pressure = x || y ? { x, y } : null;
+    this.tie(0, now); // nor past the end of his chain
   }
 
   release(): void {
@@ -595,7 +718,7 @@ export class Buddy {
   /** Vanish and reappear on the floor at centre x (evil mode). */
   teleport(x: number): void {
     if (this.busy) return;
-    this.x = Math.max(0, Math.min(innerWidth - this.w, x - this.w / 2));
+    this.x = this.withinReach(Math.max(0, Math.min(innerWidth - this.w, x - this.w / 2))); // chained: only as far as it goes
     this.standingOn = null;
     this.container = null;
     this.y = this.floor;
@@ -608,6 +731,7 @@ export class Buddy {
   /** Bring him back on screen (tray "Call Verity back"). */
   recall(): void {
     this.onArrive = null;
+    this.onAbandon = null;
     this.container = null;
     this.x = innerWidth - this.w - 80;
     this.y = -this.h;

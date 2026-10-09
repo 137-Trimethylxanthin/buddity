@@ -30,7 +30,7 @@ function show(f: MirrorFrame): void {
   const w = SIZE * skin.shape[0];
   const h = SIZE * skin.shape[1];
   // His position on the desktop, in this screen's pixels; y counts up from the floor.
-  const x = (f.x - me.x) / me.scale;
+  const x = (f.x - me.left) / me.scale;
   const y = innerHeight - f.bottom / me.scale - h;
   if (x + w * 1.6 < 0 || x - w * 0.6 > innerWidth) return hide(); // not on this screen (with room for squash)
   if (f.ownerDraws && f.owner === index) return hide(); // the character window draws this part itself

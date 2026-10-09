@@ -27,6 +27,8 @@ pub struct AppWindow {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// One of the system's menus that pop open over everything (Windows' Start menu and the like).
+    pub menu: bool,
 }
 
 pub fn set_enabled(on: bool) {
@@ -183,6 +185,7 @@ mod hyprland {
                     y: c["at"][1].as_f64().unwrap_or(0.0) * m.scale,
                     w: c["size"][0].as_f64().unwrap_or(0.0) * m.scale,
                     h: c["size"][1].as_f64().unwrap_or(0.0) * m.scale,
+                    menu: false,
                 })
                 .collect(),
         )
@@ -288,6 +291,7 @@ mod x11 {
                 y: pos.dst_y as f64 - t,
                 w: geo.width as f64 + l + r,
                 h: geo.height as f64 + t + b,
+                menu: false,
             });
         }
         Some(out)
@@ -316,9 +320,13 @@ mod platform {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
     use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::core::{w, Interface, PCWSTR};
+    use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomation2, TreeScope_Children};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+        EnumChildWindows, EnumWindows, FindWindowExW, GetWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
 
     struct Found {
@@ -354,12 +362,24 @@ mod platform {
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || GetWindowTextLengthW(hwnd) == 0 {
             return true.into();
         }
-        if (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32) & WS_EX_TOOLWINDOW.0 != 0 {
+        // Not tool windows (the desktop itself is one) or click-through overlays.
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & (WS_EX_TOOLWINDOW.0 | WS_EX_TRANSPARENT.0) != 0 {
+            return true.into();
+        }
+        // Nor an app's popups that never take focus: Windows 11 apps keep a titled XAML "PopupHost"
+        // for their flyouts and tips, often empty and invisible.
+        if ex & WS_EX_NOACTIVATE.0 != 0 && GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid()) {
             return true.into();
         }
         let mut cloaked = 0u32;
         let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
         if cloaked != 0 {
+            return true.into();
+        }
+        // Already listed as one of the menus.
+        let id = format!("{:x}", hwnd.0 as usize);
+        if found.out.iter().any(|w| w.id == id) {
             return true.into();
         }
         let mut pid = 0u32;
@@ -368,11 +388,14 @@ mod platform {
             return true.into();
         }
         let mut r = RECT::default();
-        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).is_err() {
+        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).is_err()
+            || r.right <= r.left
+            || r.bottom <= r.top
+        {
             return true.into();
         }
         let Found { names, seen, .. } = &mut *found;
-        let app = match seen.get(&pid) {
+        let mut name_of = |pid: u32| match seen.get(&pid) {
             Some(name) => name.clone(),
             None => {
                 let name = names.remove(&pid).unwrap_or_else(|| process_name(pid));
@@ -382,26 +405,123 @@ mod platform {
                 name
             }
         };
+        let mut app = name_of(pid);
+        if app.eq_ignore_ascii_case("ApplicationFrameHost") {
+            app = name_of(hosted_pid(hwnd, pid));
+        }
         found.out.push(AppWindow {
-            id: format!("{:x}", hwnd.0 as usize),
+            id,
             app,
             x: r.left as f64,
             y: r.top as f64,
             w: (r.right - r.left) as f64,
             h: (r.bottom - r.top) as f64,
+            menu: false,
         });
         true.into()
     }
 
-    /// EnumWindows goes front to back.
+    /// Store apps' windows belong to ApplicationFrameHost; the app itself owns a window inside the frame.
+    /// Its process, or the frame's own if there's none (the app is starting or suspended).
+    unsafe fn hosted_pid(frame: HWND, frame_pid: u32) -> u32 {
+        unsafe extern "system" fn child(hwnd: HWND, data: LPARAM) -> BOOL {
+            let (frame_pid, found) = &mut *(data.0 as *mut (u32, u32));
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 || pid == *frame_pid {
+                return true.into();
+            }
+            *found = pid;
+            false.into()
+        }
+        let mut data = (frame_pid, 0u32);
+        let _ = EnumChildWindows(Some(frame), Some(child), LPARAM(&mut data as *mut (u32, u32) as isize));
+        if data.1 != 0 { data.1 } else { frame_pid }
+    }
+
+    /// EnumWindows goes front to back; the menus that are open are in front of everything.
     pub fn list(me: u32) -> Vec<AppWindow> {
         let names = NAMES.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
-        let mut found = Found { me, out: Vec::new(), names, seen: HashMap::new() };
+        let mut found = Found { me, out: menus(), names, seen: HashMap::new() };
         unsafe {
             let _ = EnumWindows(Some(each), LPARAM(&mut found as *mut Found as isize));
         }
         *NAMES.lock().unwrap_or_else(|e| e.into_inner()) = Some(found.seen);
         found.out
+    }
+
+    /// Windows' menus that pop open over everything, by the process that shows them (their titles are
+    /// translated). EnumWindows never lists them (they're above the desktop's windows); they're always
+    /// there, cloaked while closed. Quick Settings isn't one: it doesn't say where its panel is, only
+    /// its full-height frame.
+    const MENUS: [(&str, &str); 3] = [("StartMenuExperienceHost", "Start"), ("SearchHost", "Search"), ("ShellExperienceHost", "Notification Center")];
+
+    thread_local! {
+        /// Asks the menus where their panels are (only the polling thread does), never waiting long on a hung one.
+        static UIA: Option<IUIAutomation> = unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let uia: Option<IUIAutomation> = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok();
+            if let Some(uia2) = uia.as_ref().and_then(|u| u.cast::<IUIAutomation2>().ok()) {
+                let _ = uia2.SetConnectionTimeout(250);
+                let _ = uia2.SetTransactionTimeout(250);
+            }
+            uia
+        };
+    }
+
+    fn menus() -> Vec<AppWindow> {
+        let mut out: Vec<AppWindow> = Vec::new();
+        let mut after: Option<HWND> = None;
+        unsafe {
+            while let Ok(hwnd) = FindWindowExW(None, after, w!("Windows.UI.Core.CoreWindow"), PCWSTR::null()) {
+                after = Some(hwnd);
+                let mut cloaked = 0u32;
+                if !IsWindowVisible(hwnd).as_bool()
+                    || DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4).is_err()
+                    || cloaked != 0
+                {
+                    continue;
+                }
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let process = process_name(pid);
+                let Some(&(_, name)) = MENUS.iter().find(|(p, _)| p.eq_ignore_ascii_case(&process)) else { continue };
+                let Some(r) = UIA.with(|uia| uia.as_ref().and_then(|uia| panel(uia, hwnd))) else { continue };
+                out.push(AppWindow {
+                    id: format!("{:x}", hwnd.0 as usize),
+                    app: name.to_string(),
+                    x: r.left as f64,
+                    y: r.top as f64,
+                    w: (r.right - r.left) as f64,
+                    h: (r.bottom - r.top) as f64,
+                    menu: true,
+                });
+            }
+        }
+        // Search opens along with Start, as the search box in it.
+        if out.iter().any(|m| m.app == "Start") {
+            out.retain(|m| m.app != "Search");
+        }
+        out
+    }
+
+    /// Where a menu's panel is: its window covers the whole screen (Start) or is taller than the panel,
+    /// so it's what's in it, kept to the window (Start slides up from below the screen as it opens).
+    unsafe fn panel(uia: &IUIAutomation, hwnd: HWND) -> Option<RECT> {
+        let mut frame = RECT::default();
+        DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut frame as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).ok()?;
+        let parts = uia.ElementFromHandle(hwnd).ok()?.FindAll(TreeScope_Children, &uia.CreateTrueCondition().ok()?).ok()?;
+        let mut all: Option<RECT> = None;
+        for i in 0..parts.Length().ok()? {
+            let Ok(r) = parts.GetElement(i).and_then(|part| part.CurrentBoundingRectangle()) else { continue };
+            if r.right <= r.left || r.bottom <= r.top {
+                continue; // not showing
+            }
+            all = Some(all.map_or(r, |a| RECT { left: a.left.min(r.left), top: a.top.min(r.top), right: a.right.max(r.right), bottom: a.bottom.max(r.bottom) }));
+        }
+        let a = all?;
+        let r = RECT { left: a.left.max(frame.left), top: a.top.max(frame.top), right: a.right.min(frame.right), bottom: a.bottom.min(frame.bottom) };
+        (r.right > r.left && r.bottom > r.top).then_some(r)
     }
 }
 
@@ -429,7 +549,7 @@ function run() {
         let scale = SCALE.get_or_init(main_scale);
         rows.into_iter()
             .filter(|r| r.2 != me)
-            .map(|(id, app, _, x, y, w, h)| AppWindow { id, app, x: x * scale, y: y * scale, w: w * scale, h: h * scale })
+            .map(|(id, app, _, x, y, w, h)| AppWindow { id, app, x: x * scale, y: y * scale, w: w * scale, h: h * scale, menu: false })
             .collect()
     }
 

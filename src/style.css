@@ -436,3 +436,63 @@ body {
   display: none;
 }
 #hand.on { display: block; }
+
+/* ---------- Microphone ---------- */
+
+/* Held up in front of him, leaning in towards his mouth; it stays upright while he rolls. */
+#mic {
+  position: absolute;
+  left: 61%;
+  top: 43%;
+  width: 19%;
+  pointer-events: none;
+  transform: rotate(-28deg);
+  transform-origin: 50% 90%;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.35));
+  transition: opacity 0.25s, transform 0.25s;
+}
+#mic.hidden { opacity: 0; transform: rotate(-28deg) translateY(30%); }
+#mic.live { animation: mic-sway 0.9s ease-in-out infinite alternate; }
+#mic svg { display: block; width: 100%; overflow: visible; }
+.mic-handle { fill: #26262b; }
+.mic-band { fill: #b9bec7; }
+.mic-head { fill: #595e66; stroke: #9aa0a9; stroke-width: 2.5; }
+.mic-grille { fill: none; stroke: #8b9099; stroke-width: 1.4; }
+.mic-shine { fill: rgb(255 255 255 / 0.35); }
+@keyframes mic-sway {
+  from { transform: rotate(-32deg); }
+  to { transform: rotate(-22deg); }
+}
+
+/* ---------- Chain ---------- */
+
+.chain-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.chain-back { z-index: 1; } /* behind him */
+.chain-front { z-index: 2; } /* the front of the loop: over him (added after him), under the bubble */
+.chain-layer.hidden, .chain-anchor.hidden { display: none; }
+.chain-layer path { fill: none; stroke-linecap: round; }
+.link-ring { stroke: #a9afb8; stroke-width: 6; stroke-dasharray: 9 7; }
+.link-hole { stroke: #4d525a; stroke-width: 2; stroke-dasharray: 9 7; }
+.link-side { stroke: #7c828b; stroke-width: 3; stroke-dasharray: 5 11; stroke-dashoffset: -11; }
+.chain-anchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  cursor: grab;
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 0.4));
+}
+.chain-anchor:active { cursor: grabbing; }
+.chain-anchor svg { display: block; width: 100%; height: 100%; }
+.bolt-plate { fill: #6d727b; stroke: #3f434a; stroke-width: 1.5; }
+.bolt-ring { fill: none; stroke: #c3c8d0; stroke-width: 3; }
+.bolt-head { fill: #3f434a; }

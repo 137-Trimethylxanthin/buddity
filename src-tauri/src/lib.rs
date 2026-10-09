@@ -250,7 +250,7 @@ fn show_settings(app: &AppHandle, section: Option<&str>) -> tauri::Result<()> {
         Some(section) => format!("settings.html#{section}"),
         None => "settings.html".into(),
     };
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(page.into()))
+    with_main_browser_args(app, WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(page.into())))
         .title("Verity settings")
         .inner_size(360.0, 700.0)
         .resizable(false)
@@ -392,6 +392,14 @@ fn cover(win: &WebviewWindow, monitor: &tauri::Monitor) {
     let _ = win.set_size(PhysicalSize::new(area.size.width, area.size.height));
 }
 
+/// Covers the work area again if it changed under the window (a taskbar or dock moved, resized or went away).
+fn refit(win: &WebviewWindow, monitor: &tauri::Monitor) {
+    let area = monitor.work_area();
+    if win.inner_position().ok() != Some(area.position) || win.inner_size().ok() != Some(area.size) {
+        cover(win, monitor);
+    }
+}
+
 // ---------- Several screens ----------
 // The window covers one screen at a time (a layer-shell overlay can't span
 // screens). When Verity crosses an edge into another screen, the window moves
@@ -436,6 +444,14 @@ fn sync_mirrors(app: &AppHandle, list: &[tauri::Monitor]) -> u32 {
     mirrors.0
 }
 
+/// WebView2 only makes webviews that share the main one's browser arguments (set in its config).
+fn with_main_browser_args<'a>(app: &AppHandle, builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>) -> WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
+    match app.config().app.windows.iter().find(|w| w.label == "main").and_then(|w| w.additional_browser_args.clone()) {
+        Some(args) => builder.additional_browser_args(&args),
+        None => builder,
+    }
+}
+
 /// One click-through window per screen that draws Verity while he's crossing
 /// from one screen to the next (see src/mirror.ts). Only with several screens,
 /// and only where windows can be put on a given screen.
@@ -449,7 +465,7 @@ fn spawn_mirrors(app: &AppHandle, list: &[tauri::Monitor], generation: u32) {
         return; // GNOME on Wayland: windows can't be placed
     }
     for (i, monitor) in list.iter().enumerate() {
-        let Ok(win) = WebviewWindowBuilder::new(app, mirror_label(generation, i), WebviewUrl::App("mirror.html".into()))
+        let Ok(win) = with_main_browser_args(app, WebviewWindowBuilder::new(app, mirror_label(generation, i), WebviewUrl::App("mirror.html".into())))
             .title("Verity")
             .transparent(true)
             .decorations(false)
@@ -488,6 +504,9 @@ struct Screen {
     y: i32,
     w: u32,
     h: u32,
+    /// Where the window sits across it (the work area, so not under a side taskbar or dock).
+    left: i32,
+    width: u32,
     scale: f64,
     current: bool,
     primary: bool,
@@ -514,10 +533,22 @@ fn current_screen(app: &AppHandle, list: &[tauri::Monitor]) -> Option<usize> {
 
 /// Async: it may make mirror windows, and asks Hyprland for each screen's floor.
 #[tauri::command]
-async fn screens(app: AppHandle) -> Vec<Screen> {
+async fn screens(app: AppHandle, window: WebviewWindow) -> Vec<Screen> {
     let list = monitors(&app);
     let generation = sync_mirrors(&app, &list);
     let current = current_screen(&app, &list);
+    // Where windows can be placed, keep them over the work area (the screens' `left` and floor assume it).
+    #[cfg(target_os = "linux")]
+    let placeable = !LAYERED.load(Ordering::SeqCst) && std::env::var_os("WAYLAND_DISPLAY").is_none();
+    #[cfg(not(target_os = "linux"))]
+    let placeable = true;
+    // Each window refits only itself, so it learns the new coordinates in the same call.
+    if placeable {
+        let mine = if window.label() == "main" { current } else { (0..list.len()).find(|&i| window.label() == mirror_label(generation, i)) };
+        if let Some(m) = mine.and_then(|i| list.get(i)) {
+            refit(&window, m);
+        }
+    }
     let primary = app.primary_monitor().ok().flatten();
     list.iter()
         .enumerate()
@@ -526,6 +557,8 @@ async fn screens(app: AppHandle) -> Vec<Screen> {
             y: m.position().y,
             w: m.size().width,
             h: m.size().height,
+            left: m.work_area().position.x,
+            width: m.work_area().size.width,
             scale: m.scale_factor(),
             current: Some(i) == current,
             primary: primary.as_ref().is_some_and(|p| screen_id(p) == screen_id(m)),

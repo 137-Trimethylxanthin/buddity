@@ -161,6 +161,9 @@ export interface Screen {
   y: number;
   w: number;
   h: number;
+  /** Where the window sits across it (the work area, so not under a side taskbar or dock). */
+  left: number;
+  width: number;
   scale: number;
   /** The window is on this one. */
   current: boolean;
@@ -233,6 +236,8 @@ export interface AppWindow {
   y: number;
   w: number;
   h: number;
+  /** One of the system's menus that pop open over everything (Windows' Start menu and the like). */
+  menu: boolean;
 }
 
 /** Watch where other apps' windows are (the "windows" setting). */

@@ -12,6 +12,7 @@ export interface WindowBox {
   y: number;
   w: number;
   h: number;
+  menu: boolean;
 }
 
 /** Where he is: in front of a window, or standing on top of one. */
@@ -36,7 +37,7 @@ export function toBoxes(windows: AppWindow[], screens: Screen[], here: Screen, v
     const s = screens.find((s) => cx >= s.x && cx < s.x + s.w && cy >= s.y && cy < s.y + s.h);
     if (!s || s.y >= here.y + here.h || s.y + s.h <= here.y) return []; // off screen, or not side by side with this one
     const y = viewHeight - (s.floor - w.y) / here.scale;
-    return [{ id: w.id, app: w.app, x: (w.x - here.x) / here.scale, y, w: w.w / here.scale, h: w.h / here.scale }];
+    return [{ id: w.id, app: w.app, x: (w.x - here.left) / here.scale, y, w: w.w / here.scale, h: w.h / here.scale, menu: w.menu }];
   });
 }
 

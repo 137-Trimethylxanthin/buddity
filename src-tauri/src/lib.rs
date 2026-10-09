@@ -231,17 +231,26 @@ fn set_music(on: bool) {
 }
 
 /// Opens the settings window, or brings it to the front if it's already open.
+/// `section` ("looks") scrolls it to that part of the page; without one an open window scrolls to the top.
 /// Async: creating a window from a sync command can deadlock on Windows.
 #[tauri::command]
-async fn open_settings(app: AppHandle) -> Result<(), String> {
-    show_settings(&app).map_err(|e| e.to_string())
+async fn open_settings(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    let section = section.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()));
+    show_settings(&app, section.as_deref()).map_err(|e| e.to_string())
 }
 
-fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+fn show_settings(app: &AppHandle, section: Option<&str>) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("settings") {
+        // No section means plain "Settings…": back to the top.
+        let _ = app.emit_to("settings", "settings-section", section.unwrap_or("top"));
         return win.set_focus();
     }
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    // The page is joined onto the app URL, so a #fragment survives.
+    let page = match section {
+        Some(section) => format!("settings.html#{section}"),
+        None => "settings.html".into(),
+    };
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(page.into()))
         .title("Verity settings")
         .inner_size(360.0, 700.0)
         .resizable(false)
@@ -280,11 +289,6 @@ mod linux {
         });
     }
 
-    /// On Wayland compositors with wlr-layer-shell (Hyprland, KDE, Sway) turn the
-    /// window into an overlay layer: it covers the screen above normal windows, is
-    /// on every workspace and never takes keyboard focus. Plain Wayland windows
-    /// can't be positioned or kept on top by the app itself.
-    /// Returns false where layer-shell isn't available (X11, GNOME).
     /// Moves the layer-shell overlay to the gdk monitor that matches the given one.
     pub fn move_layer(window: &tauri::WebviewWindow, monitor: &tauri::Monitor) {
         use gtk_layer_shell::LayerShell;
@@ -313,6 +317,11 @@ mod linux {
         });
     }
 
+    /// On Wayland compositors with wlr-layer-shell (Hyprland, KDE, Sway) turn the
+    /// window into an overlay layer: it covers the screen above normal windows, is
+    /// on every workspace and never takes keyboard focus. Plain Wayland windows
+    /// can't be positioned or kept on top by the app itself.
+    /// Returns false where layer-shell isn't available (X11, GNOME).
     pub fn try_layer_shell(window: &tauri::WebviewWindow) -> bool {
         use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
@@ -390,14 +399,47 @@ fn cover(win: &WebviewWindow, monitor: &tauri::Monitor) {
 
 /// Whether the window is a layer-shell overlay (moved with set_monitor, not set_position).
 static LAYERED: AtomicBool = AtomicBool::new(false);
-/// Index into available_monitors() of the screen the window is on.
-static SCREEN: Mutex<Option<usize>> = Mutex::new(None);
+/// The screen the window is on, by identity: indices shift when a screen is unplugged.
+static SCREEN: Mutex<Option<ScreenId>> = Mutex::new(None);
+/// The screens the mirror windows were made for, and their generation. The
+/// generation is in their labels, so new ones never reuse a closing window's label.
+static MIRRORS: Mutex<(u32, Option<Vec<ScreenId>>)> = Mutex::new((0, None));
+
+/// A screen by where it is and its size.
+type ScreenId = (PhysicalPosition<i32>, PhysicalSize<u32>);
+
+fn screen_id(m: &tauri::Monitor) -> ScreenId {
+    (*m.position(), *m.size())
+}
+
+fn mirror_label(generation: u32, i: usize) -> String {
+    format!("mirror-{generation}-{i}")
+}
+
+/// Makes the mirror windows match the screens: when one is plugged in or out,
+/// they're all closed and made again. Returns the current generation.
+/// Only from setup or an async command: building windows from a sync one can deadlock on Windows.
+fn sync_mirrors(app: &AppHandle, list: &[tauri::Monitor]) -> u32 {
+    let mut mirrors = MIRRORS.lock().unwrap();
+    let ids: Vec<ScreenId> = list.iter().map(screen_id).collect();
+    if mirrors.1.as_ref() == Some(&ids) {
+        return mirrors.0;
+    }
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("mirror-") {
+            let _ = win.destroy();
+        }
+    }
+    mirrors.0 += 1;
+    mirrors.1 = Some(ids);
+    spawn_mirrors(app, list, mirrors.0);
+    mirrors.0
+}
 
 /// One click-through window per screen that draws Verity while he's crossing
 /// from one screen to the next (see src/mirror.ts). Only with several screens,
 /// and only where windows can be put on a given screen.
-fn spawn_mirrors(app: &AppHandle) {
-    let list = monitors(app);
+fn spawn_mirrors(app: &AppHandle, list: &[tauri::Monitor], generation: u32) {
     if list.len() < 2 {
         return;
     }
@@ -407,11 +449,7 @@ fn spawn_mirrors(app: &AppHandle) {
         return; // GNOME on Wayland: windows can't be placed
     }
     for (i, monitor) in list.iter().enumerate() {
-        let label = format!("mirror-{i}");
-        if app.get_webview_window(&label).is_some() {
-            continue;
-        }
-        let Ok(win) = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("mirror.html".into()))
+        let Ok(win) = WebviewWindowBuilder::new(app, mirror_label(generation, i), WebviewUrl::App("mirror.html".into()))
             .title("Verity")
             .transparent(true)
             .decorations(false)
@@ -428,7 +466,11 @@ fn spawn_mirrors(app: &AppHandle) {
         if layered {
             #[cfg(target_os = "linux")]
             {
-                linux::try_layer_shell(&win);
+                // gtk only on the main thread (this may run on another); queued before the move below.
+                let w = win.clone();
+                let _ = win.run_on_main_thread(move || {
+                    linux::try_layer_shell(&w);
+                });
                 linux::move_layer(&win, monitor);
                 linux::apply_input_shape(&win, Vec::new()); // never catches the mouse
             }
@@ -461,19 +503,20 @@ fn monitors(app: &AppHandle) -> Vec<tauri::Monitor> {
 
 /// The screen the window is on: the last one moved to, else the one the window reports, else the primary.
 fn current_screen(app: &AppHandle, list: &[tauri::Monitor]) -> Option<usize> {
-    if let Some(i) = *SCREEN.lock().unwrap() {
-        if i < list.len() {
-            return Some(i);
-        }
+    let moved_to = *SCREEN.lock().unwrap();
+    if let Some(i) = moved_to.and_then(|id| list.iter().position(|m| screen_id(m) == id)) {
+        return Some(i);
     }
     let win = app.get_webview_window("main")?;
     let on = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten())?;
-    list.iter().position(|m| m.position() == on.position() && m.size() == on.size())
+    list.iter().position(|m| screen_id(m) == screen_id(&on))
 }
 
+/// Async: it may make mirror windows, and asks Hyprland for each screen's floor.
 #[tauri::command]
-fn screens(app: AppHandle) -> Vec<Screen> {
+async fn screens(app: AppHandle) -> Vec<Screen> {
     let list = monitors(&app);
+    let generation = sync_mirrors(&app, &list);
     let current = current_screen(&app, &list);
     let primary = app.primary_monitor().ok().flatten();
     list.iter()
@@ -485,8 +528,8 @@ fn screens(app: AppHandle) -> Vec<Screen> {
             h: m.size().height,
             scale: m.scale_factor(),
             current: Some(i) == current,
-            primary: primary.as_ref().is_some_and(|p| p.position() == m.position() && p.size() == m.size()),
-            mirror: app.get_webview_window(&format!("mirror-{i}")).is_some(),
+            primary: primary.as_ref().is_some_and(|p| screen_id(p) == screen_id(m)),
+            mirror: app.get_webview_window(&mirror_label(generation, i)).is_some(),
             floor: appwindows::screen_floor(m.position().x, m.position().y).unwrap_or_else(|| {
                 let a = m.work_area();
                 a.position.y as f64 + a.size.height as f64
@@ -511,7 +554,7 @@ fn move_to_screen(app: AppHandle, index: usize) -> Result<(), String> {
         }
         cover(&win, monitor);
     }
-    *SCREEN.lock().unwrap() = Some(index);
+    *SCREEN.lock().unwrap() = Some(screen_id(monitor));
     Ok(())
 }
 
@@ -552,7 +595,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 // Not from inside the event handler: building a window there can deadlock on Windows.
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = show_settings(&app);
+                    let _ = show_settings(&app, None);
                 });
             }
             id => {
@@ -589,7 +632,7 @@ pub fn run() {
                     cover_screen(&win);
                 }
             }
-            spawn_mirrors(app.handle());
+            sync_mirrors(app.handle(), &monitors(app.handle()));
             spawn_cursor_poll(app.handle().clone());
             music::spawn(app.handle().clone());
             appwindows::spawn(app.handle().clone());

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mirror",
+  "description": "The per-screen mirror windows only draw Verity: they hear his frames and say when one is shown (the app's own screens command needs no permission)",
+  "windows": [
+    "mirror-*"
+  ],
+  "permissions": [
+    "core:event:default"
+  ]
+}

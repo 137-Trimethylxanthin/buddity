@@ -119,20 +119,24 @@ mod hyprland {
     /// Monitors change rarely; asked at most once a second (windows are asked every frame while he's on one).
     fn monitors() -> Vec<Monitor> {
         static CACHE: std::sync::Mutex<Option<(std::time::Instant, Value)>> = std::sync::Mutex::new(None);
-        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        let fresh = cache.as_ref().is_some_and(|(at, _)| at.elapsed() < std::time::Duration::from_secs(1));
-        if !fresh {
+        let lock = || CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cached = lock().clone();
+        // Not holding the lock while asking: a slow socket would stall the other callers.
+        if !cached.as_ref().is_some_and(|(at, _)| at.elapsed() < std::time::Duration::from_secs(1)) {
             if let Some(v) = ask("j/monitors") {
-                *cache = Some((std::time::Instant::now(), v));
+                cached = Some((std::time::Instant::now(), v));
+                *lock() = cached.clone();
             }
         }
-        let Some((_, Value::Array(list))) = cache.as_ref() else { return Vec::new() };
+        let Some((_, Value::Array(list))) = cached else { return Vec::new() };
         list.iter()
             .map(|m| Monitor {
                 id: m["id"].as_i64().unwrap_or(-1),
                 x: m["x"].as_f64().unwrap_or(0.0),
                 y: m["y"].as_f64().unwrap_or(0.0),
-                h: m["height"].as_f64().unwrap_or(0.0) / m["scale"].as_f64().unwrap_or(1.0),
+                // width/height are before the transform: rotated by 90° or 270° (odd), they swap.
+                h: m[if m["transform"].as_i64().unwrap_or(0) % 2 == 1 { "width" } else { "height" }].as_f64().unwrap_or(0.0)
+                    / m["scale"].as_f64().unwrap_or(1.0),
                 scale: m["scale"].as_f64().unwrap_or(1.0),
                 workspace: m["activeWorkspace"]["id"].as_i64().unwrap_or(i64::MIN),
                 special: m["specialWorkspace"]["id"].as_i64().unwrap_or(0),
@@ -190,27 +194,67 @@ mod x11 {
     use super::AppWindow;
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, Window};
+    use x11rb::rust_connection::RustConnection;
 
+    /// The connection and atoms, kept across polls (it's polled every frame at times).
+    struct X {
+        conn: RustConnection,
+        root: Window,
+        stacking: u32,
+        desktop: u32,
+        current: u32,
+        state: u32,
+        hidden: u32,
+        pid: u32,
+        extents: u32,
+    }
+
+    impl X {
+        fn connect() -> Option<Self> {
+            let (conn, screen) = x11rb::connect(None).ok()?;
+            let root = conn.setup().roots[screen].root;
+            let atom = |name: &str| conn.intern_atom(false, name.as_bytes()).ok()?.reply().ok().map(|r| r.atom);
+            Some(Self {
+                root,
+                stacking: atom("_NET_CLIENT_LIST_STACKING")?,
+                desktop: atom("_NET_WM_DESKTOP")?,
+                current: atom("_NET_CURRENT_DESKTOP")?,
+                state: atom("_NET_WM_STATE")?,
+                hidden: atom("_NET_WM_STATE_HIDDEN")?,
+                pid: atom("_NET_WM_PID")?,
+                extents: atom("_NET_FRAME_EXTENTS")?,
+                conn,
+            })
+        }
+    }
+
+    /// Reconnects on the next poll after a failure (e.g. the X server restarted).
     pub fn list(me: u32) -> Option<Vec<AppWindow>> {
-        let (conn, screen) = x11rb::connect(None).ok()?;
-        let root = conn.setup().roots[screen].root;
-        let atom = |name: &str| conn.intern_atom(false, name.as_bytes()).ok()?.reply().ok().map(|r| r.atom);
-        let cardinals = |win: Window, prop: u32| -> Option<Vec<u32>> {
-            let r = conn.get_property(false, win, prop, AtomEnum::ANY, 0, 64).ok()?.reply().ok()?;
+        static CONN: std::sync::Mutex<Option<X>> = std::sync::Mutex::new(None);
+        let mut held = CONN.lock().unwrap_or_else(|e| e.into_inner());
+        if held.is_none() {
+            *held = X::connect();
+        }
+        let out = read(held.as_ref()?, me);
+        if out.is_none() {
+            *held = None;
+        }
+        out
+    }
+
+    fn read(x: &X, me: u32) -> Option<Vec<AppWindow>> {
+        let X { ref conn, root, stacking, desktop, current, state, hidden, pid, extents } = *x;
+        // Length is in 32-bit units: small for a window's own properties, unlimited for the client list.
+        let read32 = |win: Window, prop: u32, len: u32| -> Option<Vec<u32>> {
+            let r = conn.get_property(false, win, prop, AtomEnum::ANY, 0, len).ok()?.reply().ok()?;
             let values: Vec<u32> = r.value32()?.collect();
             Some(values)
         };
-        let stacking = atom("_NET_CLIENT_LIST_STACKING")?;
-        let desktop = atom("_NET_WM_DESKTOP")?;
-        let current = atom("_NET_CURRENT_DESKTOP")?;
-        let state = atom("_NET_WM_STATE")?;
-        let hidden = atom("_NET_WM_STATE_HIDDEN")?;
-        let pid = atom("_NET_WM_PID")?;
-        let extents = atom("_NET_FRAME_EXTENTS")?;
+        let cardinals = |win: Window, prop: u32| read32(win, prop, 64);
         let now = cardinals(root, current).and_then(|d| d.first().copied());
         let mut out = Vec::new();
         // The stacking list is bottom to top.
-        for win in cardinals(root, stacking)?.into_iter().rev() {
+        for win in read32(root, stacking, u32::MAX / 4)?.into_iter().rev() {
             if cardinals(win, pid).and_then(|p| p.first().copied()) == Some(me) {
                 continue;
             }
@@ -268,6 +312,7 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::AppWindow;
+    use std::collections::HashMap;
     use windows::core::BOOL;
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
@@ -279,7 +324,13 @@ mod platform {
     struct Found {
         me: u32,
         out: Vec<AppWindow>,
+        /// App names by pid from the last poll, and this poll's (only pids still showing windows are kept).
+        names: HashMap<u32, String>,
+        seen: HashMap<u32, String>,
     }
+
+    /// Kept across polls: asking a process for its name every frame is slow.
+    static NAMES: std::sync::Mutex<Option<HashMap<u32, String>>> = std::sync::Mutex::new(None);
 
     fn process_name(pid: u32) -> String {
         unsafe {
@@ -320,9 +371,20 @@ mod platform {
         if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).is_err() {
             return true.into();
         }
+        let Found { names, seen, .. } = &mut *found;
+        let app = match seen.get(&pid) {
+            Some(name) => name.clone(),
+            None => {
+                let name = names.remove(&pid).unwrap_or_else(|| process_name(pid));
+                if !name.is_empty() {
+                    seen.insert(pid, name.clone()); // a failed lookup is tried again next time
+                }
+                name
+            }
+        };
         found.out.push(AppWindow {
             id: format!("{:x}", hwnd.0 as usize),
-            app: process_name(pid),
+            app,
             x: r.left as f64,
             y: r.top as f64,
             w: (r.right - r.left) as f64,
@@ -333,10 +395,12 @@ mod platform {
 
     /// EnumWindows goes front to back.
     pub fn list(me: u32) -> Vec<AppWindow> {
-        let mut found = Found { me, out: Vec::new() };
+        let names = NAMES.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+        let mut found = Found { me, out: Vec::new(), names, seen: HashMap::new() };
         unsafe {
             let _ = EnumWindows(Some(each), LPARAM(&mut found as *mut Found as isize));
         }
+        *NAMES.lock().unwrap_or_else(|e| e.into_inner()) = Some(found.seen);
         found.out
     }
 }

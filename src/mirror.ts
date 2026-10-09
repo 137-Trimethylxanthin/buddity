@@ -9,7 +9,7 @@ import { SKINS } from "./skins";
 
 const SIZE = 160; // same as the character window
 
-const index = Number(getCurrentWindow().label.split("-")[1]);
+const index = Number(getCurrentWindow().label.split("-").at(-1)); // "mirror-{generation}-{screen}"
 const buddyEl = document.getElementById("buddy")!;
 const faceEl = document.getElementById("verity")!;
 let me: Screen | null = null;

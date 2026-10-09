@@ -25,15 +25,18 @@ const MIN_LEDGE = 0.6; // of his width: shorter visible stretches aren't worth s
 
 /**
  * Converts windows (physical desktop px) to the character window's px, relative
- * to the screen `here`. Heights are measured from each screen's floor, so bars
- * of different heights on different screens line up.
+ * to the screen `here` (scaled like physicalX in main.ts). Heights are measured
+ * from each window's own screen's floor, so bars of different heights on
+ * different screens line up. Windows on screens above or below `here` are left out.
  */
 export function toBoxes(windows: AppWindow[], screens: Screen[], here: Screen, viewHeight: number): WindowBox[] {
-  return windows.map((w) => {
+  return windows.flatMap((w) => {
     const cx = w.x + w.w / 2;
-    const s = screens.find((s) => cx >= s.x && cx < s.x + s.w) ?? here;
-    const y = viewHeight - (s.floor - w.y) / s.scale;
-    return { id: w.id, app: w.app, x: (w.x - here.x) / here.scale, y, w: w.w / s.scale, h: w.h / s.scale };
+    const cy = w.y + w.h / 2;
+    const s = screens.find((s) => cx >= s.x && cx < s.x + s.w && cy >= s.y && cy < s.y + s.h);
+    if (!s || s.y >= here.y + here.h || s.y + s.h <= here.y) return []; // off screen, or not side by side with this one
+    const y = viewHeight - (s.floor - w.y) / here.scale;
+    return [{ id: w.id, app: w.app, x: (w.x - here.x) / here.scale, y, w: w.w / here.scale, h: w.h / here.scale }];
   });
 }
 

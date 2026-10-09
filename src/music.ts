@@ -58,6 +58,7 @@ export class Music {
       this.lyrics = null;
       this.lyricsDone = false;
       this.bpm = null;
+      this.lyricsFor = this.tempoFor = ""; // the same song coming back (after a stop) is looked up again
       this.started = false;
     }
     // A song "starts" the first time it's heard playing (it may have been noticed paused).

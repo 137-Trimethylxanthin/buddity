@@ -2,6 +2,14 @@
   --ink: #000;
   --bubble: #fffdf2;
   --bubble-edge: #7a5200;
+  --bubble-shadow: #c99a2e; /* the solid drop shadow under bubbles and the menu */
+  --title: #3d2900;
+  --muted: #8a6a1f;
+  --row: #fff3c4;
+  --row-edge: #ecd389;
+  --row-hover: #fff27a;
+  --accent: #ffd21f;
+  --accent-hover: #ffe04d;
 }
 
 html,
@@ -12,7 +20,7 @@ body {
   background: transparent;
   user-select: none;
   -webkit-user-select: none;
-  font-family: "Comic Neue", "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
+  font-family: "Fredoka Variable", "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
 }
 
 #stage {
@@ -193,40 +201,101 @@ body {
   to { transform: none; opacity: 1; }
 }
 
-/* ---------- Right-click menu ---------- */
+/* ---------- Menu (right click): labelled pills on an arc around him ---------- */
 
+/* A layer over the stage; only the pills catch the mouse. */
 #menu {
   position: absolute;
-  left: 0;
-  top: 0;
+  inset: 0;
   z-index: 10;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  background: var(--bubble);
-  border: 3px solid var(--bubble-edge);
-  border-radius: 16px;
-  box-shadow: 0 6px 16px rgb(0 0 0 / 0.3);
-  transition: opacity 0.15s;
-}
-#menu.hidden { opacity: 0; pointer-events: none; }
-.menu-row { display: flex; gap: 6px; }
-.menu-row button {
-  flex: 1;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 700;
-  white-space: nowrap;
-  padding: 5px 10px;
-  border: 2px solid var(--bubble-edge);
-  border-radius: 10px;
-  background: #ffd21f;
+  pointer-events: none;
   color: var(--ink);
-  cursor: pointer;
+  transition: opacity 0.14s;
 }
-.menu-row button:hover { background: #fff27a; }
-.menu-row button.active { background: #7a5200; color: #fff6c9; }
+#menu.hidden { opacity: 0; }
+#menu.hidden .slice { pointer-events: none; }
+
+/* His name and what he's up to, small, just over his head. */
+.menu-head {
+  position: absolute;
+  padding: 3px 11px 4px;
+  text-align: center;
+  white-space: nowrap;
+  background: var(--bubble);
+  border: 2px solid var(--bubble-edge);
+  border-radius: 12px;
+  filter: drop-shadow(0 2px 0 var(--bubble-shadow));
+  animation: pop 0.24s cubic-bezier(.3, 1.5, .5, 1);
+}
+.menu-title { font-size: 14px; font-weight: 700; line-height: 1.1; color: var(--title); }
+.menu-status { font-size: 11.5px; font-weight: 500; line-height: 1.2; color: var(--muted); }
+
+.slice {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px 3px 3px;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--bubble);
+  border: 2.5px solid var(--bubble-edge);
+  border-radius: 999px;
+  box-shadow: 0 3px 0 var(--bubble-shadow);
+  cursor: pointer;
+  outline: none;
+  pointer-events: auto;
+  transition: background 0.1s, scale 0.12s, translate 0.1s;
+  animation: slice-in 0.32s cubic-bezier(.3, 1.45, .5, 1) backwards;
+  animation-delay: calc(var(--i) * 28ms);
+}
+.slice-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  font-size: 14px;
+  border-radius: 50%;
+  background: var(--row);
+  box-shadow: inset 0 0 0 2px var(--row-edge);
+}
+.slice-label u { text-decoration-thickness: 2px; text-underline-offset: 2px; }
+.slice:hover:not([aria-disabled]),
+.slice:focus-visible:not([aria-disabled]) { background: var(--row-hover); scale: 1.07; }
+.slice:active:not([aria-disabled]) { translate: 0 2px; box-shadow: 0 1px 0 var(--bubble-shadow); }
+.slice.primary { font-size: 16px; padding: 4px 14px 4px 4px; background: var(--accent); box-shadow: 0 3px 0 var(--bubble-edge); }
+.slice.primary .slice-icon { width: 28px; height: 28px; font-size: 16px; background: var(--bubble); }
+.slice.primary:hover:not([aria-disabled]),
+.slice.primary:focus-visible:not([aria-disabled]) { background: var(--accent-hover); }
+.slice[aria-disabled] { opacity: 0.45; cursor: default; filter: grayscale(1); }
+
+/* Each pill pops out from him, one after another. */
+@keyframes slice-in {
+  from { opacity: 0; transform: translate(var(--fx, 0), var(--fy, 0)) scale(0.3); }
+  to { opacity: 1; transform: none; }
+}
+
+#menu.creepy,
+#bubble.creepy,
+#hint.creepy {
+  --ink: #ffe9a8;
+  --bubble: #1a0f0f;
+  --bubble-edge: #8a1c1c;
+  --bubble-shadow: #3d0606;
+  --row: #2a1515;
+  --row-edge: #4d1d1d;
+  --row-hover: #4a1616;
+  --accent: #8a1c1c;
+  --accent-hover: #a82424;
+  --title: #ffd9a0;
+  --muted: #c98d7a;
+}
+#menu.creepy .slice.primary { color: #fff3d6; box-shadow: 0 3px 0 var(--bubble-shadow); }
 
 /* ---------- Floating notes and hearts ---------- */
 
@@ -257,14 +326,17 @@ body {
   background: var(--bubble);
   color: var(--ink);
   border: 3px solid var(--bubble-edge);
-  border-radius: 18px;
-  font-size: 16px;
-  font-weight: 700;
+  border-radius: 20px;
+  font-size: 17px;
+  font-weight: 600;
   line-height: 1.3;
   text-align: center;
-  box-shadow: 0 4px 10px rgb(0 0 0 / 0.25);
-  transition: opacity 0.2s;
+  filter: drop-shadow(0 4px 0 var(--bubble-shadow)); /* solid, and it follows the tail too */
+  transform-origin: var(--tail, 50%) 100%;
+  transition: opacity 0.2s, scale 0.2s;
 }
+#bubble.below { transform-origin: var(--tail, 50%) 0; }
+#bubble:not(.hidden) { animation: pop 0.28s cubic-bezier(.3, 1.6, .5, 1); }
 #bubble::after {
   content: "";
   position: absolute;
@@ -278,26 +350,83 @@ body {
   border-bottom: 3px solid var(--bubble-edge);
   transform: rotate(45deg);
 }
-#bubble.hidden { opacity: 0; pointer-events: none; }
-#bubble.creepy { background: #1a0f0f; color: #ffe9a8; --bubble: #1a0f0f; border-color: #8a1c1c; }
-#bubble.creepy::after { border-color: #8a1c1c; }
+/* Under him (near the top of the screen): the tail points up. */
+#bubble.below::after { bottom: auto; top: -13px; transform: rotate(225deg); }
+#bubble.hidden { opacity: 0; scale: 0.9; pointer-events: none; }
 #bubble p { margin: 0; min-height: 1.3em; }
 
 #bubble-choices { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
-#bubble-choices:not(:empty) { margin-top: 8px; }
+#bubble-choices:not(:empty) { margin-top: 10px; }
 #bubble-choices button {
   font: inherit;
-  font-size: 14px;
-  padding: 3px 10px;
-  border: 2px solid var(--bubble-edge);
-  border-radius: 10px;
-  background: #ffd21f;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 4px 12px;
   color: var(--ink);
+  background: var(--row);
+  border: 2px solid var(--row-edge);
+  border-radius: 13px;
   cursor: pointer;
+  outline: none;
+  transition: background 0.1s, border-color 0.1s;
 }
-#bubble-choices button:hover { background: #fff27a; }
+#bubble-choices button:hover,
+#bubble-choices button:focus-visible { background: var(--row-hover); border-color: var(--bubble-edge); }
+#bubble-choices button:active { translate: 0 1px; }
 
-/* ---------- PetPet hand (right click) ---------- */
+/* Squash and stretch in, like he's blowing it up. */
+@keyframes pop {
+  0% { opacity: 0; scale: 0.5 0.4; }
+  55% { opacity: 1; scale: 1.06 0.95; }
+  80% { scale: 0.98 1.02; }
+  100% { scale: 1; }
+}
+
+/* ---------- Name tag (cursor resting on him) ---------- */
+
+#hint {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  top: 0;
+  padding: 5px 12px 6px;
+  background: var(--bubble);
+  color: var(--ink);
+  border: 2px solid var(--bubble-edge);
+  border-radius: 14px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 0 var(--bubble-shadow));
+  transform-origin: var(--tail, 50%) 100%;
+  transition: opacity 0.18s, scale 0.18s;
+}
+#hint.below { transform-origin: var(--tail, 50%) 0; }
+#hint.hidden { opacity: 0; scale: 0.85; }
+#hint::after {
+  content: "";
+  position: absolute;
+  left: var(--tail, 50%);
+  bottom: -7px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: var(--bubble);
+  border-right: 2px solid var(--bubble-edge);
+  border-bottom: 2px solid var(--bubble-edge);
+  transform: rotate(45deg);
+}
+#hint.below::after { bottom: auto; top: -7px; transform: rotate(225deg); }
+.hint-title { font-size: 16px; font-weight: 700; line-height: 1.15; color: var(--title); }
+.hint-line { font-size: 12.5px; font-weight: 500; line-height: 1.25; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  #bubble, #menu, #hint, .menu-head, .slice, #bubble-choices button { animation: none !important; transition: opacity 0.15s; }
+  #bubble.hidden, #hint.hidden { scale: none; }
+  .slice:hover:not([aria-disabled]), .slice:focus-visible:not([aria-disabled]) { scale: none; }
+}
+
+/* ---------- PetPet hand (a left click pets him) ---------- */
 #hand {
   position: absolute;
   left: 0;

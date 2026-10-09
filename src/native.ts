@@ -2,7 +2,7 @@
 // browser (`bun run dev` without Tauri) so the character can be worked on there.
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import type { Setting } from "./store";
+import type { Chattiness, Setting } from "./store";
 import type { AccessoryId } from "./wardrobe";
 import type { FacePose } from "./face";
 import type { SkinId } from "./skins";
@@ -60,8 +60,23 @@ export function discordStatus(status: { details: string; state: string } | null)
   if (inTauri) invoke("discord_status", { status }).catch(() => {});
 }
 
-export function openSettings(): void {
-  if (inTauri) invoke("open_settings").catch(() => {});
+/** Open the settings window (or bring it to the front); "looks" scrolls it to the skins and wardrobe, no section to the top. */
+export function openSettings(section?: "looks"): void {
+  if (inTauri) invoke("open_settings", { section: section ?? null }).catch(() => {});
+}
+
+/** The backend asks an already open settings window to show a section. */
+export function onSettingsSection(cb: (section: string) => void): void {
+  if (inTauri) void listen<string>("settings-section", (e) => cb(e.payload));
+}
+
+/** The settings window tells the character window which skin to wear. */
+export function sendSkin(id: SkinId): void {
+  if (inTauri) void emit("skin", id);
+}
+
+export function onSkin(cb: (id: SkinId) => void): void {
+  if (inTauri) void listen<SkinId>("skin", (e) => cb(e.payload));
 }
 
 /** The settings window tells the character window when a setting changes. */
@@ -71,6 +86,15 @@ export function sendSetting(key: Setting, on: boolean): void {
 
 export function onSetting(cb: (key: Setting, on: boolean) => void): void {
   if (inTauri) void listen<{ key: Setting; on: boolean }>("setting", (e) => cb(e.payload.key, e.payload.on));
+}
+
+/** The settings window tells the character window how often he may talk on his own. */
+export function sendChattiness(c: Chattiness): void {
+  if (inTauri) void emit("chattiness", c);
+}
+
+export function onChattiness(cb: (c: Chattiness) => void): void {
+  if (inTauri) void listen<Chattiness>("chattiness", (e) => cb(e.payload));
 }
 
 /** The wardrobe (in the settings window) tells the character window what he's wearing now. */

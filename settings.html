@@ -8,125 +8,396 @@
       :root {
         color-scheme: light dark;
         --bg: #fffbea;
+        --card: #ffffff;
         --fg: #2b2410;
-        --muted: #7a6c45;
-        --line: #eadfb8;
+        --muted: #7d6e45;
+        --line: #f0e6c4;
         --accent: #f2c200;
+        --accent-soft: #fff1b0;
+        --track: #e4d9b5;
+        --tile: #fffbea;
+        --shadow: 0 1px 2px rgba(90, 70, 10, 0.06), 0 2px 8px rgba(90, 70, 10, 0.05);
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #1d1a12;
+          --card: #28241a;
           --fg: #f3ecd3;
-          --muted: #a89a72;
+          --muted: #ab9d76;
           --line: #3a3423;
+          --accent-soft: #4a3e14;
+          --track: #4b4430;
+          --tile: #221f16;
+          --shadow: none;
         }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
       }
       body {
         margin: 0;
-        padding: 20px;
+        padding: 18px 16px 24px;
         background: var(--bg);
         color: var(--fg);
-        font: 14px/1.4 system-ui, sans-serif;
+        font: 14px/1.35 "Fredoka Variable", system-ui, sans-serif;
         user-select: none;
+        overflow-x: hidden;
       }
       h1 {
-        margin: 0 0 14px;
-        font-size: 18px;
-      }
-      label {
         display: flex;
-        gap: 12px;
-        align-items: flex-start;
-        padding: 12px 0;
-        border-top: 1px solid var(--line);
-        cursor: pointer;
+        align-items: center;
+        gap: 10px;
+        margin: 0 4px 16px;
+        font-size: 21px;
+        font-weight: 600;
       }
-      label[hidden] {
-        display: none;
-      }
-      input {
-        margin: 2px 0 0;
-        width: 18px;
-        height: 18px;
-        accent-color: var(--accent);
-        flex: none;
-      }
-      .update {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding-top: 14px;
-        border-top: 1px solid var(--line);
-      }
-      button {
-        align-self: flex-start;
-        padding: 6px 14px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
+      h1::before {
+        content: "";
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
         background: var(--accent);
-        color: #2b2410;
-        font: inherit;
+        box-shadow: inset -3px -3px 0 rgba(0, 0, 0, 0.12);
+      }
+      h2 {
+        margin: 0 4px 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      section {
+        margin-bottom: 18px;
+        scroll-margin-top: 12px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      /* A setting: title and description on the left, a switch on the right. */
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
         cursor: pointer;
       }
-      button:disabled {
-        opacity: 0.6;
-        cursor: default;
+      .row + .row {
+        border-top: 1px solid var(--line);
+      }
+      .row.sub {
+        padding-left: 30px;
+      }
+      .text {
+        flex: 1;
+        min-width: 0;
+      }
+      .title {
+        display: block;
+        font-weight: 500;
+        font-size: 14.5px;
       }
       small {
         display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font: 12.5px/1.35 system-ui, sans-serif;
+      }
+      .update {
+        cursor: default;
+      }
+      .row.off {
+        cursor: default;
+      }
+      .row.off .text {
+        opacity: 0.5;
+      }
+
+      input[role="switch"] {
+        appearance: none;
+        flex: none;
+        position: relative;
+        width: 40px;
+        height: 24px;
+        margin: 0;
+        border-radius: 12px;
+        background: var(--track);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      input[role="switch"]::before {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+        transition: transform 0.15s;
+      }
+      input[role="switch"]:checked {
+        background: var(--accent);
+      }
+      input[role="switch"]:checked::before {
+        transform: translateX(16px);
+      }
+      input[role="switch"]:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+      }
+      .action {
+        flex: none;
+        padding: 6px 12px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--accent);
+        color: #2b2410;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .action:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      /* Looks: skins and wardrobe tiles. */
+      .looks {
+        padding: 12px 14px 14px;
+      }
+      .looks + .looks {
+        border-top: 1px solid var(--line);
+      }
+      .label {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .slot-label {
+        margin: 0 0 5px 2px;
+        font: 11.5px system-ui, sans-serif;
         color: var(--muted);
       }
-      h2 {
-        margin: 18px 0 4px;
-        font-size: 15px;
-      }
-      .wardrobe {
+      .grid {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 6px;
-        margin: 8px 0 18px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
       }
-      .wardrobe button {
-        align-self: stretch;
+      /* Hats get a full row; glasses and neck sit side by side, one tile wide. */
+      .slot-head {
+        grid-column: 1 / -1;
+      }
+      .slot-face .grid,
+      .slot-neck .grid {
+        grid-template-columns: 1fr;
+      }
+      .tile {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 2px;
-        padding: 6px 2px;
-        background: transparent;
-        color: var(--fg);
-        font-size: 11px;
-        line-height: 1.2;
+        justify-content: center;
+        gap: 4px;
+        width: 100%;
+        min-height: 58px;
+        padding: 7px 4px;
+        border: 2px solid transparent;
+        border-radius: 12px;
+        background: var(--tile);
+        font-size: 12.5px;
+        line-height: 1.15;
+        text-align: center;
+        transition: background 0.12s, border-color 0.12s;
       }
-      .wardrobe button span {
-        font-size: 24px;
-        line-height: 1.1;
+      .tile:hover {
+        border-color: var(--line);
       }
-      .wardrobe button[aria-pressed="true"] {
-        background: var(--accent);
+      .tile[aria-pressed="true"] {
         border-color: var(--accent);
-        color: #2b2410;
+        background: var(--accent-soft);
+        font-weight: 500;
+      }
+      .tile .icon {
+        font-size: 22px;
+        line-height: 1;
+      }
+      /* Skin tiles: a picture of him in that skin over its name. */
+      .tile.skin {
+        gap: 2px;
+        padding: 6px 4px 7px;
+      }
+      .pic {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        height: 64px;
+      }
+      .pic img {
+        display: block;
+        filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.18));
+      }
+
+      /* The live preview at the top of Looks: him on a little stage, standing on its floor. */
+      .stage {
+        position: relative;
+        height: 196px;
+        border-bottom: 1px solid var(--line);
+        background:
+          radial-gradient(ellipse 60% 70% at 50% 100%, var(--accent-soft), transparent 70%),
+          var(--tile);
+        overflow: hidden;
+      }
+      .stage::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: 16px;
+        width: 110px;
+        height: 14px;
+        margin-left: -55px;
+        border-radius: 50%;
+        background: radial-gradient(closest-side, rgba(60, 45, 0, 0.28), transparent);
+      }
+      #preview {
+        position: absolute;
+        left: 50%;
+        bottom: 22px;
+        z-index: 1;
+        transform: translateX(-50%);
+      }
+      #preview canvas {
+        position: absolute;
+        pointer-events: none;
+      }
+      .stage-name {
+        position: absolute;
+        top: 10px;
+        left: 14px;
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      /* A choice of a few options: radios styled as one segmented pill. */
+      .row.choice {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 9px;
+        cursor: default;
+      }
+      .segmented {
+        display: flex;
+        padding: 3px;
+        border-radius: 999px;
+        background: var(--track);
+      }
+      .segmented label {
+        flex: 1;
+        position: relative;
+        cursor: pointer;
+      }
+      .segmented input {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+      .segmented span {
+        display: block;
+        padding: 5px 0;
+        border-radius: 999px;
+        font-size: 13px;
+        text-align: center;
+        transition: background 0.15s, box-shadow 0.15s;
+      }
+      .segmented input:checked + span {
+        background: var(--card);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+        font-weight: 500;
+      }
+      .segmented input:focus-visible + span {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
       }
     </style>
     <script type="module" src="/src/settings.ts"></script>
   </head>
   <body>
-    <h1>Verity settings 💛</h1>
-    <h2>Wardrobe</h2>
-    <small>One hat, one pair of glasses and one neck thing at a time.</small>
-    <div class="wardrobe" id="wardrobe"></div>
-    <label><input type="checkbox" data-key="sound" /><span>Sound<small>His voice, songs and noises.</small></span></label>
-    <label><input type="checkbox" data-key="pester" /><span>Pester<small>Ignore him for 5 minutes and he pushes your cursor around and scrolls your page.</small></span></label>
-    <label><input type="checkbox" data-key="autostart" /><span>Start with PC<small>He starts when you log in.</small></span></label>
-    <label><input type="checkbox" data-key="screens" /><span>All screens<small>With more than one screen he wanders, gets thrown and dragged from one to the next.</small></span></label>
-    <label><input type="checkbox" data-key="windows" /><span>Climb windows<small>He stands on your windows, goes inside them and knows which app he's next to. He only sees app names, never what's in the windows.</small></span></label>
-    <label><input type="checkbox" data-key="music" /><span>Music<small>He notices what you're playing (Spotify, YouTube, any player) and dances along. This stays on your PC.</small></span></label>
-    <label><input type="checkbox" data-key="lyrics" /><span>Sing along<small>Looks up the lyrics and the tempo so he can sing and dance in time. The song's title and artist are sent to lrclib.net and deezer.com.</small></span></label>
-    <label><input type="checkbox" data-key="discord" /><span>Discord status<small>Shows "Verity" on your Discord profile while he's running.</small></span></label>
-    <label hidden><input type="checkbox" data-key="jumpscare" /><span>Crashout jumpscare<small>When he comes back after you "closed" him, he zooms at you.</small></span></label>
-    <div class="update">
-      <button id="check-update" type="button">Check for updates</button>
-      <small id="update-status"></small>
-    </div>
+    <h1>Verity settings</h1>
+
+    <section id="looks">
+      <h2>Looks</h2>
+      <div class="card">
+        <div class="stage">
+          <p class="stage-name" id="skin-name" aria-live="polite"></p>
+          <div id="preview" role="img" aria-label="Verity as he looks now"></div>
+        </div>
+        <div class="looks">
+          <p class="label">Skin</p>
+          <div class="grid" id="skins"></div>
+        </div>
+        <div class="looks">
+          <p class="label">Wardrobe</p>
+          <div class="grid" id="wardrobe"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Behaviour</h2>
+      <div class="card">
+        <label class="row"><span class="text"><span class="title">Sound</span><small>His voice, songs and noises.</small></span><input type="checkbox" role="switch" data-key="sound" /></label>
+        <div class="row choice" role="radiogroup" aria-labelledby="chat-title" aria-describedby="chat-desc">
+          <span class="text"><span class="title" id="chat-title">Talks on his own</span><small id="chat-desc">How often he starts chatting. Quiet: only when you ask him to talk (right-click → Talk).</small></span>
+          <div class="segmented">
+            <label><input type="radio" name="chattiness" value="often" /><span>Often</span></label>
+            <label><input type="radio" name="chattiness" value="sometimes" /><span>Sometimes</span></label>
+            <label><input type="radio" name="chattiness" value="quiet" /><span>Quiet</span></label>
+          </div>
+        </div>
+        <label class="row"><span class="text"><span class="title">Push my cursor when ignored</span><small>Ignore him for 5 minutes and he nudges your cursor and scrolls.</small></span><input type="checkbox" role="switch" data-key="pester" /></label>
+        <label class="row"><span class="text"><span class="title">All screens</span><small>He wanders and gets thrown between your screens.</small></span><input type="checkbox" role="switch" data-key="screens" /></label>
+        <label class="row"><span class="text"><span class="title">Climb windows</span><small>He stands on and goes into your windows. He only sees app names, never what's in them.</small></span><input type="checkbox" role="switch" data-key="windows" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Music</h2>
+      <div class="card">
+        <label class="row"><span class="text"><span class="title">Music</span><small>He notices what you play in any player and dances. This stays on your PC.</small></span><input type="checkbox" role="switch" data-key="music" /></label>
+        <label class="row sub"><span class="text"><span class="title">Sing along</span><small>Finds the lyrics and tempo. Sends the song's title and artist to lrclib.net and deezer.com.</small></span><input type="checkbox" role="switch" data-key="lyrics" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>System</h2>
+      <div class="card">
+        <label class="row"><span class="text"><span class="title">Start with PC</span><small>He starts when you log in.</small></span><input type="checkbox" role="switch" data-key="autostart" /></label>
+        <label class="row"><span class="text"><span class="title">Discord status</span><small>Shows "Verity" on your Discord profile while he runs.</small></span><input type="checkbox" role="switch" data-key="discord" /></label>
+        <label class="row" hidden><span class="text"><span class="title">Crashout jumpscare</span><small>When he comes back after you "closed" him, he zooms at you.</small></span><input type="checkbox" role="switch" data-key="jumpscare" /></label>
+        <div class="row update">
+          <span class="text"><span class="title">Updates</span><small id="update-status" aria-live="polite"></small></span>
+          <button class="action" id="check-update" type="button">Check for updates</button>
+        </div>
+      </div>
+    </section>
   </body>
 </html>

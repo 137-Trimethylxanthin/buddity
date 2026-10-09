@@ -1,7 +1,9 @@
+import "@fontsource-variable/fredoka";
 import { Buddy, type Side, type State } from "./buddy";
 import { BALL_FILL, Face, type Mouth, type Press } from "./face";
 import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pauseLines, pick, placeLines, quiz, randomLine, render, songLines, type Context, type Mood, type Stats } from "./lines";
-import { ContextMenu, type MenuItem } from "./menu";
+import { Hint } from "./hint";
+import { ContextMenu } from "./menu";
 import {
   cursorTo,
   discordStatus,
@@ -13,8 +15,10 @@ import {
   moveToScreen,
   onMirrorShown,
   sendMirror,
+  onChattiness,
   onCursor,
   onFakeQuit,
+  onSkin,
   appWindowsFast,
   onAppWindows,
   onMusic,
@@ -35,10 +39,10 @@ import { emit } from "./particles";
 import { Music, songKey, type LyricLine } from "./music";
 import { appName, ledges, placeOf, sameApp, toBoxes, type Place, type WindowBox } from "./places";
 import { Prop, spawnFood, spawnPuke, Treadmill } from "./props";
-import { isSkinId, SKIN_IDS, SKINS, type Skin } from "./skins";
+import { isSkinId, SKINS, type Skin } from "./skins";
 import { BEAT_S, snippets, vowelOf } from "./song";
 import { Speech } from "./speech";
-import { load, loadWardrobe, save, saveSetting, setting } from "./store";
+import { chattiness, load, loadWardrobe, save, saveSetting, setting } from "./store";
 import { autostartState, findUpdate, installUpdate, setAutostart } from "./updates";
 import { Voice } from "./voice";
 import { accessory, parseWorn, wornHeight, type AccessoryId } from "./wardrobe";
@@ -55,7 +59,7 @@ const PESTER_AFTER_MS = 5 * 60_000; // ignored this long, he comes to get your a
 const CURSOR_FRESH_MS = 5000; // how recent a known cursor position must be to roll over to it
 const UPDATE_FIRST_CHECK_MS = 20_000;
 const UPDATE_EVERY_MS = 10 * 60_000;
-const PET_DELAY_MS = 120; // a right-click waits this long in case the left button joins (squeeze)
+const MENU_DELAY_MS = 120; // a right-click waits this long in case the left button joins (squeeze)
 const SQUEEZE_FULL_MS = 1100; // time to squeeze all the way
 const EDGE_SQUISH_PX = 110; // pushing this far into an edge squishes him fully
 const SHAKE_SPEED = 700; // px/s drag speed that counts as a shake stroke
@@ -90,6 +94,8 @@ const SONG_DANCE_CHANCE = 0.6; // dances to a new song
 const DANCE_MS: [number, number] = [15_000, 35_000];
 const SING_ALONG_CHANCE = 0.7; // per song, he sings a few lines of it at some point
 const SING_ALONG_LINES: [number, number] = [2, 4];
+const STUCK_SCREEN_MS = 30_000; // a screen the window couldn't move to is a wall this long
+const SING_ALONG_TRIES = 60; // 3 s apart: gives up on a song after 3 minutes of him being busy (or no lyrics/position)
 const LYRIC_LINE_MAX_MS = 4500; // the bubble doesn't stay up longer than this per line
 
 const stageEl = document.getElementById("stage")!;
@@ -151,7 +157,12 @@ const speech = new Speech(bubbleEl, {
     }
   },
 });
-const menu = new ContextMenu(document.getElementById("menu")!, () => (regionsDirty = true));
+const menu = new ContextMenu(document.getElementById("menu")!, faceEl, () => (regionsDirty = true));
+const hint = new Hint(document.getElementById("hint")!, () =>
+  speech.visible || menu.visible || pressing || squeezing || singing || buddy.state === "drag" || invulnerable() || pushing()
+    ? null
+    : { title: skin.name, status: statusLine(), creepy: mood === "creepy" },
+);
 
 function onStateChange(state: State): void {
   faceEl.classList.remove("idle", "walk", "fall", "drag", "exercise");
@@ -237,7 +248,7 @@ function teleportNearCursor(): void {
     const target = cursor ? cursor.x + side * (120 + Math.random() * 120) : Math.random() * innerWidth;
     buddy.teleport(target);
     playClass(faceEl, "appear", 400);
-    if (Math.random() < 0.5) window.setTimeout(() => say(randomLine("creepy", ctx)), 300);
+    if (Math.random() < 0.5 && mayChat()) window.setTimeout(() => say(randomLine("creepy", ctx)), 300);
     else window.setTimeout(() => voice.laugh(), 200);
   }, 360);
 }
@@ -258,7 +269,18 @@ function playClass(el: HTMLElement, cls: string, ms: number): void {
 function say(line: string, choices?: string[], onChoice?: (c: string) => void): void {
   if (singing || gone) return;
   buddy.hold(performance.now(), 6000);
+  hint.hide();
   speech.say(line, mood, choices, onChoice);
+}
+
+/**
+ * Whether he may start talking on his own right now (idle chatter, remarks about
+ * places, songs, ...). Answers to you are never gated. Read when the moment comes,
+ * so a change in the settings applies at once.
+ */
+function mayChat(): boolean {
+  const c = chattiness();
+  return c === "often" || (c === "sometimes" && Math.random() < 0.5);
 }
 
 function talk(): void {
@@ -283,12 +305,15 @@ function centre(): { x: number; y: number } {
   return { x: buddy.x + buddy.w / 2, y: buddy.y };
 }
 
+let snippetRound = 0; // bumped by stopSinging to cut off a snippet (its own counter, so sing-alongs and snippets don't cut each other off)
+
 /** Sings a short snippet: lyrics in the bubble, sung notes, hops on the beat, floating notes. */
 function sing(): void {
-  if (singing || buddy.busy || gone) return;
+  if (singing || buddy.busy || invulnerable()) return; // not while gone or crashing out
   const options = snippets(skin);
   const notes = options[Math.floor(Math.random() * options.length)];
   singing = true;
+  const round = ++snippetRound; // stopSinging (vanishing, crashing out) cuts it off
   buddy.hold(performance.now(), 60_000);
 
   let lyric = "♪";
@@ -296,7 +321,7 @@ function sing(): void {
   notes.forEach((note, i) => {
     const dur = note.beats * BEAT_S;
     window.setTimeout(() => {
-      if (gone) return;
+      if (gone || round !== snippetRound) return;
       lyric += (note.join ? "" : " ") + note.syl;
       speech.show(`${lyric} ♪`, mood);
       voice.note(note.semis, dur * 0.95, vowelOf(note.syl));
@@ -311,6 +336,8 @@ function sing(): void {
     t += dur;
   });
   window.setTimeout(() => {
+    // Cut off: stopSinging already tidied up, and the bubble may be his crashout line now. Just let him move again.
+    if (round !== snippetRound) return buddy.hold(performance.now(), 0);
     singing = false;
     face.setMouth("smile");
     speech.hideLater(1500);
@@ -608,7 +635,9 @@ function vanish(): void {
     treadmill?.setRunning(false);
     workoutUntil = 0;
   }
+  buddy.stop(performance.now()); // forget any errand, so crashOut can teleport him
   menu.close();
+  hint.hide();
   speech.hide();
   stageEl.style.visibility = "hidden";
   vignetteEl.style.visibility = "hidden";
@@ -695,8 +724,8 @@ function jumpscare(now: number): { scale: number; pull: number; jitter: number }
   return { scale: 1 + (peak - 1) * k, pull: k, jitter: t < 1900 ? 24 : 0 };
 }
 
-// ---------- Petting (right click): the PetPet hand pats him once ----------
-// Each right-click starts the pat over, so it can be spammed.
+// ---------- Petting (a left click on him): the PetPet hand pats him once ----------
+// Each pet starts the pat over, so it can be spammed.
 
 let petStart = -Infinity;
 const handFrames = Array.from({ length: PET_FRAMES }, (_, i) => {
@@ -891,7 +920,7 @@ function updateRegions(): void {
     : [
         rectOf(buddyEl),
         ...(speech.visible ? [rectOf(bubbleEl)] : []),
-        ...(menu.visible ? [rectOf(menu.element)] : []),
+        ...menu.hitRects(),
       ];
   const key = rects.map((r) => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}`).join("|");
   if (key !== lastRegionKey) {
@@ -908,9 +937,13 @@ function placeBubble(): void {
   // Above his head (and his hat), unless he's near the top of the screen.
   const hat = wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2);
   const above = buddy.y - hat - h - BUBBLE_GAP;
-  const top = above > 8 ? above : buddy.y + buddy.h + BUBBLE_GAP;
+  const below = above <= 8;
+  const top = below ? buddy.y + buddy.h + BUBBLE_GAP : above;
   bubbleEl.style.transform = `translate(${left}px, ${top}px)`;
-  bubbleEl.style.setProperty("--tail", `${Math.max(20, Math.min(w - 20, mid - left))}px`);
+  // The tail points at him: up from under him when the bubble is below, and
+  // towards his middle even when the bubble is pushed in from a screen edge.
+  bubbleEl.classList.toggle("below", below);
+  bubbleEl.style.setProperty("--tail", `${Math.max(22, Math.min(w - 22, mid - left))}px`);
 }
 
 // ---------- Main loop ----------
@@ -984,6 +1017,15 @@ function frame(now: number): void {
   maybePester(now);
 
   if (speech.visible) placeBubble();
+  // The menu is laid out around him: he waits for it, and it goes if he's moved anyway.
+  if (menu.visible) {
+    if (Math.abs(buddy.x - menuAt.x) > 2 || Math.abs(buddy.y - menuAt.y) > 2) menu.close();
+    else if (buddy.state === "idle") buddy.hold(now, 1000);
+  }
+  if (hint.visible) {
+    if (speech.visible || menu.visible || singing || buddy.state === "drag" || invulnerable()) hint.hide();
+    else hint.place(buddy, wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2));
+  }
   if (regionsDirty || buddy.state !== "idle" || speech.visible) updateRegions();
   regionsDirty = false;
   requestAnimationFrame(frame);
@@ -1009,35 +1051,39 @@ window.addEventListener("mousemove", (e) => {
 });
 
 // ---------- Mouse ----------
-// Left click: talk. Left drag: carry, throw, shake, squish into edges.
+// Left click: pet. Left drag: carry, throw, shake, squish into edges.
+// Double click: giggle.
 // Both buttons held together (on him, or while carrying him): squeeze.
-// Right click: menu.
+// Right click (or middle click): the menu.
 
 let press: { x: number; y: number } | null = null;
-let petTimer = 0;
+let menuTimer = 0;
 const BOTH_BUTTONS = 3;
 
 faceEl.addEventListener("mousedown", (e) => {
+  hint.hide();
   if (untouchable() || pushing()) return;
   voice.unlock();
   noticed();
   if (e.button === 1) {
     e.preventDefault(); // no autoscroll or paste
-    return openMenu(e.clientX, e.clientY);
+    return toggleMenu();
   }
   if (e.button !== 0) return;
   if (menu.visible) menu.close();
-  window.clearTimeout(petTimer);
-  petTimer = 0;
+  window.clearTimeout(menuTimer); // the left button joined a right-click: a squeeze, not the menu
+  menuTimer = 0;
   press = { x: e.clientX, y: e.clientY };
   pressing = true;
   updateRegions();
-  if ((e.buttons & BOTH_BUTTONS) === BOTH_BUTTONS) startSqueeze();
+  if ((e.buttons & BOTH_BUTTONS) === BOTH_BUTTONS) return startSqueeze();
 });
 // While a press is going the whole window catches the mouse, so the right
 // button joining in anywhere counts.
 window.addEventListener("mousedown", (e) => {
-  if (e.button === 2 && pressing && !squeezing) startSqueeze();
+  if (e.button === 2 && pressing && !squeezing) {
+    startSqueeze();
+  }
 });
 window.addEventListener("mousemove", (e) => {
   if (!pressing) return;
@@ -1060,7 +1106,7 @@ window.addEventListener("mouseup", (e) => {
   if (e.button !== 0 || !pressing) return;
   if (buddy.state !== "drag" && press && !wasSqueezing) {
     count("clicks");
-    talk();
+    pet();
   }
   letGo();
 });
@@ -1084,53 +1130,98 @@ faceEl.addEventListener("dblclick", () => {
 window.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   // Part of a two-button squeeze, not a menu request.
-  if (squeezing || (e.buttons & 1) || performance.now() - squeezeEndedAt < 400) return;
-  if (!faceEl.contains(e.target as Node) || untouchable()) return;
-  // Spamming right-click restarts the pat each time; don't keep postponing it.
-  if (!petTimer)
-    petTimer = window.setTimeout(() => {
-      petTimer = 0;
-      pet();
-    }, PET_DELAY_MS);
+  if (squeezing || pressing || (e.buttons & 1) || performance.now() - squeezeEndedAt < 400) return;
+  if (!faceEl.contains(e.target as Node) || untouchable() || pushing()) return;
+  // Wait a moment in case the left button joins in (a squeeze).
+  window.clearTimeout(menuTimer);
+  menuTimer = window.setTimeout(() => {
+    menuTimer = 0;
+    if (!squeezing && !pressing) toggleMenu();
+  }, MENU_DELAY_MS);
 });
 faceEl.addEventListener("mouseenter", () => face.setHover(true));
-faceEl.addEventListener("mouseleave", () => face.setHover(false));
+faceEl.addEventListener("mouseleave", () => {
+  face.setHover(false);
+  hint.hide();
+});
+// The name tag shows once the cursor rests on him.
+faceEl.addEventListener("mousemove", () => {
+  if (!pressing) hint.rest();
+});
 
-function openMenu(x: number, y: number): void {
+let menuAt = { x: 0, y: 0 }; // where he was when the menu opened around him
+
+/** What he's up to, in a few words, for the menu and the name tag. */
+function statusLine(): string {
+  const doing = singing
+    ? "singing"
+    : untouchable()
+    ? "crashing out"
+    : dancing()
+    ? "dancing"
+    : squeezing
+    ? "being squeezed"
+    : buddy.state === "exercise"
+    ? "working out"
+    : buddy.state === "drag"
+    ? "being carried"
+    : buddy.state === "fall"
+    ? "flying"
+    : buddy.state === "walk"
+    ? foods().length > 0
+      ? "off to eat"
+      : "out for a walk"
+    : speech.visible
+    ? "chatting"
+    : "hanging out";
+  return `${mood === "creepy" ? "Creepy" : "Friendly"} · ${doing}`;
+}
+
+function toggleMenu(): void {
   noticed();
   if (menu.visible) return menu.close();
-  const skinItems: MenuItem[] = SKIN_IDS.map((id) => ({
-    label: SKINS[id].name,
-    active: skin.id === id,
-    action: () => {
-      applySkin(SKINS[id]);
-      say(greet(mood, ctx));
-    },
-  }));
-  menu.open(x + 12, y, [
-    [
-      { label: "🍔 Food", action: dropFood },
-      { label: "🏃 Treadmill", action: placeTreadmill },
-    ],
-    [
-      { label: "♪ Sing", action: sing },
-      { label: "💬 Talk", action: talk },
-    ],
-    skinItems.slice(0, 3),
-    skinItems.slice(3),
-    [
-      {
-        label: mood === "creepy" ? "😊 Friendly" : "😈 Creepy",
-        action: () => {
-          setMood(mood === "friendly" ? "creepy" : "friendly");
-          say(greet(mood, ctx));
+  if (gone || untouchable()) return;
+  hint.menuSeen();
+  if (!singing) speech.hide(); // the menu goes all around him; the bubble would be in the way
+  const creepy = mood === "creepy";
+  const hat = wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2);
+  // He stops rolling and waits for the menu (an errand he was on comes back later).
+  const now = performance.now();
+  if (buddy.state === "walk") buddy.stop(now);
+  buddy.hold(now, 1000);
+  menuAt = { x: buddy.x, y: buddy.y };
+  menu.open(
+    { x: buddy.x, y: buddy.y, w: buddy.w, h: buddy.h, hat },
+    {
+      title: skin.name,
+      status: statusLine(),
+      items: [
+        { icon: "💬", label: "Talk", key: "t", primary: true, disabled: singing, action: talk },
+        { icon: "♪", label: "Sing", key: "s", disabled: singing || buddy.busy, action: sing },
+        { icon: "🍔", label: "Feed", key: "f", action: dropFood },
+        { icon: "🏃", label: "Treadmill", key: "r", disabled: buddy.state === "exercise", action: placeTreadmill },
+        {
+          icon: creepy ? "😊" : "😈",
+          label: creepy ? "Be friendly" : "Get creepy",
+          key: creepy ? "b" : "c",
+          action: () => {
+            setMood(creepy ? "friendly" : "creepy");
+            say(greet(mood, ctx));
+          },
         },
-      },
-      { label: "👒 Wardrobe", action: openSettings },
-      { label: "⚙ Settings", action: openSettings },
-    ],
-  ]);
+        { icon: "👒", label: "Wardrobe & skins…", key: "w", action: () => openSettings("looks") },
+        { icon: "⚙", label: "Settings…", key: "g", action: () => openSettings() },
+      ],
+    },
+    creepy,
+  );
 }
+
+/** A skin picked in the settings window. */
+onSkin((id) => {
+  applySkin(SKINS[id]);
+  say(greet(mood, ctx));
+});
 
 /** Dressed from the wardrobe: he shows off whatever he just put on. */
 function dress(next: AccessoryId[]): void {
@@ -1158,6 +1249,12 @@ let knownScreens: Screen[] = [];
 let here: number | null = null; // the screen his coordinates are relative to
 let hopping = false; // the window is on its way to another screen
 let mirroring = false;
+let stuck: { x: number; y: number; until: number } | null = null; // a screen the window couldn't move to
+
+/** He can cross into this screen: it has a mirror, and the window didn't just fail to move there. */
+function crossable(s: Screen): boolean {
+  return s.mirror && !(stuck && performance.now() < stuck.until && s.x === stuck.x && s.y === stuck.y);
+}
 
 async function refreshScreens(): Promise<void> {
   knownScreens = await getScreens();
@@ -1174,12 +1271,12 @@ function connectedRange(): { left: number; right: number } | null {
   let right = cur.x + cur.w;
   // Grow the floor sideways while the next screen over has a mirror.
   for (;;) {
-    const l = knownScreens.find((s) => s.mirror && Math.abs(s.x + s.w - left) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
+    const l = knownScreens.find((s) => crossable(s) && Math.abs(s.x + s.w - left) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
     if (!l) break;
     left = l.x;
   }
   for (;;) {
-    const r = knownScreens.find((s) => s.mirror && Math.abs(s.x - right) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
+    const r = knownScreens.find((s) => crossable(s) && Math.abs(s.x - right) <= 8 && s.y < cur.y + cur.h && s.y + s.h > cur.y);
     if (!r) break;
     right = r.x + r.w;
   }
@@ -1262,10 +1359,11 @@ function stopMirroring(): void {
 
 /** Move this window to the screen at physical x, keeping him exactly where he is on the desktop. */
 async function follow(physX: number): Promise<void> {
-  const next = knownScreens.findIndex((s) => s.mirror && physX >= s.x && physX < s.x + s.w);
+  const next = knownScreens.findIndex((s) => crossable(s) && physX >= s.x && physX < s.x + s.w);
   const cur = here === null ? undefined : knownScreens[here];
   if (next < 0 || next === here || !cur) return;
   const to = knownScreens[next];
+  const prev = here;
   hopping = true;
   // Switch coordinates now, so the mirrors never see a jump.
   buddy.shift((cur.x - to.x + buddy.x * (cur.scale - to.scale)) / to.scale);
@@ -1280,12 +1378,25 @@ async function follow(physX: number): Promise<void> {
     window.setTimeout(done, 300); // same-size screens don't resize the window
   });
   const moved = await moveToScreen(next);
-  if (moved) await settled;
-  // Keep his height above the floor if this screen's window is taller or shorter (bars).
-  buddy.y += innerHeight - heightBefore;
+  if (moved) {
+    await settled;
+    // Keep his height above the floor if this screen's window is taller or shorter (bars).
+    // On a ledge, the resize already put him back on it.
+    if (!buddy.standingOn) buddy.y += innerHeight - heightBefore;
+    save("screen", String(next));
+  } else {
+    // The window stayed put: back to this screen's coordinates, and that screen
+    // is a wall for a while (no retrying the move every frame).
+    buddy.shift((to.x - cur.x + buddy.x * (to.scale - cur.scale)) / cur.scale);
+    here = prev;
+    stuck = { x: to.x, y: to.y, until: performance.now() + STUCK_SCREEN_MS };
+    updateBounds();
+    buddy.stop(performance.now());
+    const maxX = (buddy.bounds?.right ?? cur.w / cur.scale) - buddy.w;
+    buddy.shift(Math.max(buddy.bounds?.left ?? 0, Math.min(maxX, buddy.x)) - buddy.x);
+  }
   updatePlaces(false);
   face.refreshPixelRatio();
-  save("screen", String(next));
   hopping = false;
   lastRegionKey = ""; // the window may have been recreated on the new screen: send its click-through shape again
   regionsDirty = true;
@@ -1334,8 +1445,12 @@ let placeSince = 0;
 let placeRemarked = true;
 let partying = false;
 let karaokeLine = -1;
+let karaokeKey: string | null = null; // the song karaokeLine is a line of
 let karaokeMouth = 0;
 let fastWindows = false;
+
+// The backend's idle window poll (appwindows.rs): slower on macOS, which asks through osascript.
+const IDLE_POLL_S = /Mac/.test(navigator.userAgent) ? 1 : 0.3;
 
 /** Rebuilds the ledges from the latest window list. carry=false when only the coordinates changed (screen switch). */
 let boxesAt = 0;
@@ -1344,7 +1459,7 @@ function updatePlaces(carry = true): void {
   const cur = here === null ? undefined : knownScreens[here];
   const before = boxes;
   const at = performance.now();
-  const dt = Math.max(0.008, (at - boxesAt) / 1000);
+  const dt = Math.min(IDLE_POLL_S, Math.max(0.008, (at - boxesAt) / 1000)); // the list only comes when it changed: at most one idle poll of movement
   boxesAt = at;
   boxes = windowsOn && cur ? toBoxes(appWindows, knownScreens, cur, innerHeight) : [];
   // On (or in) a window that's moved or resized: he's loose on it, pushed around by it.
@@ -1393,7 +1508,7 @@ window.addEventListener("resize", () => updatePlaces(false));
 /** Each frame: where he is, and the party on the music app's window. */
 function updatePlace(now: number): void {
   // Standing on a window: follow it every frame, in case it's being dragged.
-  const onWindow = buddy.standingOn !== null || buddy.container !== null;
+  const onWindow = !gone && (buddy.standingOn !== null || buddy.container !== null);
   if (onWindow !== fastWindows) {
     fastWindows = onWindow;
     appWindowsFast(onWindow);
@@ -1410,7 +1525,7 @@ function updatePlace(now: number): void {
   // Settled somewhere new for a moment: sometimes he says so.
   if (!placeRemarked && place && now - placeSince > PLACE_SETTLE_MS && buddy.grounded) {
     placeRemarked = true;
-    if (Math.random() < PLACE_REMARK_CHANCE && free()) say(pick(placeLines[mood][place.on], ctx));
+    if (Math.random() < PLACE_REMARK_CHANCE && free() && mayChat()) say(pick(placeLines[mood][place.on], ctx));
   }
 
   const t = music.track;
@@ -1424,7 +1539,7 @@ function updatePlace(now: number): void {
       if (setting("lyrics")) void music.loadLyrics();
     }
     if (buddy.grounded) buddy.hold(now, 600); // stays until he's moved off
-    dance(4000);
+    if (dancing() || buddy.state === "idle") dance(4000); // keep going, or start once he's landed (no retries queued every frame)
     karaoke();
   } else if (partying) {
     partying = false;
@@ -1434,13 +1549,16 @@ function updatePlace(now: number): void {
 
 /** On the music app's window: every lyric line in the bubble as it comes up. */
 function karaoke(): void {
-  const lines = music.lyrics;
+  const lines = setting("lyrics") ? music.lyrics : null;
   const pos = music.position();
+  const key = music.track && songKey(music.track);
+  if (karaokeLine !== -1 && (!lines || key !== karaokeKey)) endKaraoke(); // the song changed (or Sing along was turned off): its line goes
   if (!lines || pos === null) return;
   let i = -1;
   while (i + 1 < lines.length && lines[i + 1].t <= pos + 0.15) i++;
   if (i === karaokeLine) return;
   karaokeLine = i;
+  karaokeKey = key;
   window.clearInterval(karaokeMouth);
   face.setMouth("smile");
   const line = lines[i];
@@ -1512,7 +1630,7 @@ const music = new Music({
     // Give the song a moment, then maybe react and dance.
     window.setTimeout(() => {
       if (music.track !== track && music.track?.title !== track.title) return;
-      if (Math.random() < SONG_REACT_CHANCE) sayWhenFree(() => pick(songLines[mood], ctx), () => music.track?.title === track.title);
+      if (Math.random() < SONG_REACT_CHANCE && mayChat()) sayWhenFree(() => pick(songLines[mood], ctx), () => music.track?.title === track.title);
       if (Math.random() < SONG_DANCE_CHANCE) window.setTimeout(() => dance(), 2500);
     }, 1500 + Math.random() * 2500);
     if (Math.random() < SING_ALONG_CHANCE) scheduleSingAlong(track);
@@ -1520,7 +1638,7 @@ const music = new Music({
   onPause() {
     ctx.music = music.track;
     stopDance();
-    if (Math.random() < 0.3 && free()) say(pick(pauseLines[mood], ctx));
+    if (Math.random() < 0.3 && free() && mayChat()) say(pick(pauseLines[mood], ctx));
   },
   onResume() {
     ctx.music = music.track;
@@ -1596,6 +1714,7 @@ function updateDance(now: number): void {
 
 /** Some time into the song, sing a few lines of it along with the music. */
 function scheduleSingAlong(track: Track): void {
+  if (!setting("lyrics")) return;
   const len = track.duration ?? 180;
   const at = len * (0.15 + Math.random() * 0.35);
   const pos = music.position() ?? 0;
@@ -1607,7 +1726,8 @@ function scheduleSingAlong(track: Track): void {
  * Sings the next few lines of the song. Being busy (held, thrown, mid-sentence)
  * only postpones it; he keeps trying until the song is nearly over.
  */
-function singAlong(key: string | null = music.track && songKey(music.track)): void {
+function singAlong(key: string | null = music.track && songKey(music.track), tries = SING_ALONG_TRIES): void {
+  if (!setting("lyrics")) return;
   const t = music.track;
   if (!t || !key || songKey(t) !== key || !music.playing) return; // the song changed or stopped
   const pos = music.position();
@@ -1617,7 +1737,7 @@ function singAlong(key: string | null = music.track && songKey(music.track)): vo
   const ready = lines !== null && pos !== null;
   const busy = gone || singing || partying || untouchable() || pushing() || hopping || buddy.state === "drag" || buddy.state === "fall";
   if (!ready || busy) {
-    singAlongTimer = window.setTimeout(() => singAlong(key), 3000);
+    if (tries > 1) singAlongTimer = window.setTimeout(() => singAlong(key, tries - 1), 3000);
     return;
   }
   const first = lines.findIndex((l) => l.t > pos + 1);
@@ -1633,6 +1753,7 @@ let singRound = 0; // bumped to cut off a sing-along that's in progress
 /** Stop any singing along right now (he's crashing out, or vanished). */
 function stopSinging(): void {
   singRound++;
+  snippetRound++;
   window.clearTimeout(singAlongTimer);
   endKaraoke();
   singing = false;
@@ -1675,6 +1796,7 @@ function sungLines(lines: LyricLine[], endT: number | null, pos: number): void {
       window.setTimeout(() => {
         if (over) return;
         window.clearInterval(mouthTimer);
+        if (round !== singRound) return void (over = true); // cut off mid-line: stopSinging already tidied up
         face.setMouth("smile");
         if (i === lines.length - 1) done();
       }, lineMs);
@@ -1720,6 +1842,10 @@ onSetting((key, on) => {
   }
 });
 
+onChattiness((c) => {
+  say(c === "often" ? "Ooh, I have so much to tell you! tee hee" : c === "sometimes" ? "Okay, I'll chat now and then. ☺" : "I'll only talk when you talk to me.");
+});
+
 onTray((id) => {
   voice.unlock();
   noticed();
@@ -1746,12 +1872,12 @@ window.addEventListener("resize", () => (regionsDirty = true));
 
 function scheduleIdleChatter(): void {
   window.setTimeout(() => {
-    if (!speech.visible && !singing && !buddy.busy && !gone) {
+    if (!speech.visible && !singing && !buddy.busy && !invulnerable()) {
       if (Math.random() < EXPLORE_CHANCE && explore()) {
         /* off to visit a window */
       } else if (Math.random() < ROAM_CHANCE) roam();
-      else if (Math.random() < SING_CHANCE && !music.playing) sing(); // not over your music
-      else talk();
+      else if (Math.random() < SING_CHANCE && !music.playing && chattiness() !== "quiet") sing(); // not over your music; Quiet: not unasked
+      else if (mayChat()) talk(); // Sometimes: every other time; Quiet: never
     }
     if (mood === "creepy" && Math.random() < 0.5) face.twitch();
     scheduleIdleChatter();
@@ -1767,7 +1893,7 @@ async function start(): Promise<void> {
   setMood(mood);
   onStateChange(buddy.state);
   requestAnimationFrame(frame);
-  window.setTimeout(() => say(greet(mood, ctx)), 1200);
+  if (chattiness() !== "quiet") window.setTimeout(() => say(greet(mood, ctx)), 1200);
   scheduleIdleChatter();
   void initAutostart();
   setMusic(musicOn);
@@ -1781,7 +1907,15 @@ async function start(): Promise<void> {
     document.body.style.background = "#556"; // see him in a plain browser
     // Browser preview has no tray; expose the actions for testing.
     Object.assign(window, {
-      verity: { sing, talk, dropFood, placeTreadmill, skin: (id: string) => isSkinId(id) && applySkin(SKINS[id]) },
+      verity: {
+        sing,
+        talk,
+        dropFood,
+        placeTreadmill,
+        skin: (id: string) => isSkinId(id) && applySkin(SKINS[id]),
+        teleport: (x: number) => buddy.teleport(x),
+        hitRects: () => menu.hitRects(),
+      },
     });
     const params = new URLSearchParams(location.search);
     const previewSkin = params.get("skin");

@@ -2,6 +2,7 @@ import type { Mood } from "./lines";
 
 const TYPE_MS = 38;
 const LINGER_MS = 4500;
+const WORD_MS = 160; // a single word shows at once; the mouth closes after this
 
 export interface SpeechHooks {
   onTalking(on: boolean): void;
@@ -43,14 +44,7 @@ export class Speech {
     this.hooks.onTalking(true);
     this.hooks.onLayout();
 
-    let i = 0;
-    const chars = [...line];
-    this.typing = window.setInterval(() => {
-      const ch = chars[i++] ?? "";
-      this.text.textContent += ch;
-      this.hooks.onChar(ch);
-      if (i < chars.length) return;
-      window.clearInterval(this.typing);
+    const finish = () => {
       this.hooks.onTalking(false);
       for (const c of choices) {
         const btn = document.createElement("button");
@@ -61,6 +55,26 @@ export class Speech {
       this.hooks.onLayout();
       // Questions wait for an answer; everything else fades out on its own.
       if (choices.length === 0) this.hideLater(LINGER_MS);
+    };
+
+    // A single word ("Hi!") just appears, with one blip.
+    if (!/\s/.test(line)) {
+      this.text.textContent = line;
+      this.hooks.onChar(line.match(/[a-z]/i)?.[0] ?? "");
+      this.hooks.onLayout();
+      this.typing = window.setTimeout(finish, WORD_MS); // cleared like the typing interval
+      return;
+    }
+
+    let i = 0;
+    const chars = [...line];
+    this.typing = window.setInterval(() => {
+      const ch = chars[i++] ?? "";
+      this.text.textContent += ch;
+      this.hooks.onChar(ch);
+      if (i < chars.length) return;
+      window.clearInterval(this.typing);
+      finish();
     }, TYPE_MS);
   }
 

@@ -19,13 +19,13 @@ export interface ChainState {
   win: { id: string; dx: number; dy: number } | null;
 }
 
-/** His box (window px) and how much of it the ball fills. */
+type Point = { x: number; y: number };
+
+/** Where the loop goes round him (the ends of a belt round his middle) and his middle, in window px. */
 interface Body {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  fill: number;
+  beltLeft: Point;
+  beltRight: Point;
+  mid: Point;
 }
 
 function svgLayer(cls: string): SVGSVGElement {
@@ -143,23 +143,27 @@ export class Chain {
     for (const el of [this.back, this.front]) el.classList.toggle("hidden", !body);
     if (!body) return; // he's somewhere else for now (the jumpscare)
     this.anchorEl.style.transform = `translate(${s.x - ANCHOR_SIZE / 2}px, ${s.y - ANCHOR_SIZE / 2}px)`;
-    // The loop goes round his belly, below his face; it stays level while he rolls.
-    const rx0 = (body.w * body.fill) / 2;
-    const ry0 = (body.h * body.fill) / 2;
-    const down = 0.42;
-    const cx = body.x + body.w / 2;
-    const cy = body.y + body.h / 2 + ry0 * down;
-    const rx = rx0 * Math.sqrt(1 - down * down) * 1.04;
+    // The loop goes round his belly, below his face, squashing and tilting with him (not rolling).
+    // Tumbled upside down (Obesity thrown hard): left and right swap, so the back of the loop stays behind him.
+    const [l, r] = body.beltLeft.x <= body.beltRight.x ? [body.beltLeft, body.beltRight] : [body.beltRight, body.beltLeft];
+    const cx = (l.x + r.x) / 2;
+    const cy = (l.y + r.y) / 2;
+    const rx = Math.hypot(r.x - l.x, r.y - l.y) / 2;
     const ry = rx * 0.24;
-    const top = `M ${cx - rx} ${cy} A ${rx} ${ry} 0 0 1 ${cx + rx} ${cy}`;
-    const bottom = `M ${cx + rx} ${cy} A ${rx} ${ry} 0 0 1 ${cx - rx} ${cy}`;
+    const tilt = Math.atan2(r.y - l.y, r.x - l.x);
+    const deg = (tilt * 180) / Math.PI;
+    const top = `M ${l.x} ${l.y} A ${rx} ${ry} ${deg} 0 1 ${r.x} ${r.y}`;
+    const bottom = `M ${r.x} ${r.y} A ${rx} ${ry} ${deg} 0 1 ${l.x} ${l.y}`;
     for (const p of this.loopBack) p.setAttribute("d", top);
     for (const p of this.loopFront) p.setAttribute("d", bottom);
     // From the anchor to the side of the loop facing it, sagging by however much is slack.
-    const a = Math.atan2((s.y - cy) / ry, (s.x - cx) / rx);
-    const px = cx + rx * Math.cos(a);
-    const py = cy + ry * Math.sin(a);
-    const d = Math.hypot(body.x + body.w / 2 - s.x, body.y + body.h / 2 - s.y);
+    const [cos, sin] = [Math.cos(tilt), Math.sin(tilt)];
+    const [ax, ay] = [(s.x - cx) * cos + (s.y - cy) * sin, -(s.x - cx) * sin + (s.y - cy) * cos]; // the anchor, in the loop's frame
+    const a = Math.atan2(ay / ry, ax / rx);
+    const [ex, ey] = [rx * Math.cos(a), ry * Math.sin(a)];
+    const px = cx + ex * cos - ey * sin;
+    const py = cy + ex * sin + ey * cos;
+    const d = Math.hypot(body.mid.x - s.x, body.mid.y - s.y);
     const sag = Math.min(260, Math.sqrt(Math.max(0, s.len * s.len - d * d)) * 0.35);
     // A curve's lowest point is halfway between its ends' middle and its control point: the slack lies on the floor, not through it.
     const lowest = innerHeight - 4;

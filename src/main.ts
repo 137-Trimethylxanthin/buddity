@@ -1,7 +1,7 @@
 import "@fontsource-variable/fredoka";
 import { Buddy, type Side, type State } from "./buddy";
 import { Chain } from "./chain";
-import { BALL_FILL, Face, type Mouth, type Press } from "./face";
+import { BALL_FILL, Face, type Landmarks, type Mouth, type Point, type Press } from "./face";
 import { calmLines, comeback, crashoutLines, dizzyLines, greet, moodForHour, ouchLines, pauseLines, pick, placeLines, quiz, randomLine, render, songLines, type Context, type Mood, type Stats } from "./lines";
 import { Hint } from "./hint";
 import { ContextMenu } from "./menu";
@@ -39,7 +39,7 @@ import {
 import { emit } from "./particles";
 import { Music, songKey, type LyricLine } from "./music";
 import { appName, ledges, placeOf, sameApp, toBoxes, type Place, type WindowBox } from "./places";
-import { Prop, spawnFood, spawnPuke, Treadmill } from "./props";
+import { Prop, spawnFood, spawnPuke, TREADMILL_HEIGHT, Treadmill } from "./props";
 import { isSkinId, SKINS, type Skin } from "./skins";
 import { BEAT_S, snippets, vowelOf } from "./song";
 import { Speech } from "./speech";
@@ -102,22 +102,25 @@ const LYRIC_LINE_MAX_MS = 4500; // the bubble doesn't stay up longer than this p
 const CHAIN_LENGTH = 240; // a new chain: at least this long...
 const CHAIN_SLACK = 60; // ...and this much longer than it needs to be to reach him
 const CHAIN_SCROLL = 20; // px longer or shorter per scroll step on the anchor
+const MIC_DROP_MS = 6000; // no music playing this long (a gap between songs is shorter): he puts the mic down
 const CHAIN_SAVE_MS = 500; // an anchor that's moving with its window is saved this often
-const HUM_NOTE_MS = 1400; // humming along (no lyrics): a note floats up this often
 
 const stageEl = document.getElementById("stage")!;
 const vignetteEl = document.getElementById("vignette")!;
 const buddyEl = document.getElementById("buddy")!;
 const faceEl = document.getElementById("verity")!;
 const bubbleEl = document.getElementById("bubble")!;
-const micEl = document.getElementById("mic")!;
 
 const savedSkin = load("skin") ?? "verity";
 let skin: Skin = SKINS[isSkinId(savedSkin) ? savedSkin : "verity"];
 let mood: Mood = moodForHour(new Date());
 let cursor: { x: number; y: number } | null = null;
 let cursorAt = 0;
-let singing = false;
+// Who has him singing (and owns the bubble and his mouth while at it): a song he
+// was asked for, a few lines sung along to the music, or a party's karaoke.
+// Each one only ends (and hides) its own singing.
+let singer: "snippet" | "singalong" | "karaoke" | null = null;
+const isSinging = () => singer !== null;
 
 function loadStats(): Stats {
   const fresh: Stats = { clicks: 0, throws: 0, feeds: 0, closes: 0 };
@@ -153,7 +156,7 @@ face.setWardrobe(worn);
 const buddy = new Buddy(SIZE * skin.shape[0], SIZE * skin.shape[1], onStateChange, onImpact);
 const speech = new Speech(bubbleEl, {
   onTalking: (on) => {
-    if (!on && !singing) face.setMouth("smile");
+    if (!on && !isSinging()) face.setMouth("smile");
   },
   onLayout: () => (regionsDirty = true),
   onChar: (ch) => {
@@ -168,7 +171,7 @@ const speech = new Speech(bubbleEl, {
 const menu = new ContextMenu(document.getElementById("menu")!, faceEl, () => (regionsDirty = true));
 const chain = new Chain(stageEl);
 const hint = new Hint(document.getElementById("hint")!, () =>
-  speech.visible || menu.visible || pressing || squeezing || singing || buddy.state === "drag" || invulnerable() || pushing()
+  speech.visible || menu.visible || pressing || squeezing || isSinging() || buddy.state === "drag" || invulnerable() || pushing()
     ? null
     : { title: skin.name, status: statusLine(), creepy: mood === "creepy" },
 );
@@ -192,6 +195,7 @@ function applySkin(next: Skin): void {
   save("skin", next.id);
   regionsDirty = true;
   updatePresence();
+  marks = face.landmarks(); // the new body's, before anything is placed by the old one's
 }
 
 /** Switch skin with a puff: growing into Obesity or slimming back down. */
@@ -222,6 +226,17 @@ function setMood(next: Mood): void {
   }
 }
 
+// Midnight to 4 a.m. he turns evil by himself, and back again after. Only when the
+// hour's mood changes, so evil mode switched on or off by hand stays until then.
+let hourMood = mood;
+let moodBeforeCrash: Mood = mood;
+window.setInterval(() => {
+  const next = moodForHour(new Date());
+  if (next === hourMood || gone || untouchable()) return; // gone or crashing out: on the next tick
+  hourMood = next;
+  if (next !== mood) setMood(next);
+}, 60_000);
+
 // ---------- Discord status ----------
 
 /** What Discord shows: who he is and what mood he's in. Nothing while he's pretending to have quit. */
@@ -240,7 +255,7 @@ function scheduleCreepyAntics(): void {
   creepyTimer = window.setTimeout(() => {
     if (mood !== "creepy") return;
     if (gone) return scheduleCreepyAntics();
-    if (Math.random() < 0.3 && buddy.grounded && !buddy.busy && !singing) teleportNearCursor();
+    if (Math.random() < 0.3 && buddy.grounded && !buddy.busy && !isSinging() && !partying && !untouchable() && !pressing && !squeezing) teleportNearCursor();
     else {
       playClass(faceEl, "glitch", 400);
       if (Math.random() < 0.5) voice.static(0.15);
@@ -276,7 +291,7 @@ function playClass(el: HTMLElement, cls: string, ms: number): void {
 // ---------- Talking and singing ----------
 
 function say(line: string, choices?: string[], onChoice?: (c: string) => void): void {
-  if (singing || gone) return;
+  if (isSinging() || gone) return;
   buddy.hold(performance.now(), 6000);
   hint.hide();
   speech.say(line, mood, choices, onChoice);
@@ -294,7 +309,7 @@ function mayChat(): boolean {
 
 function talk(): void {
   refreshCtx();
-  if (Math.random() < QUIZ_CHANCE) {
+  if (Math.random() < QUIZ_CHANCE && !partying) { // a question would hold up the party's lyrics until answered
     const q = quiz(ctx);
     say(q.question, q.choices, (choice) => {
       say(q.reply(choice));
@@ -314,14 +329,28 @@ function centre(): { x: number; y: number } {
   return { x: buddy.x + buddy.w / 2, y: buddy.y };
 }
 
+// Where his parts are on screen (see Face.landmarks), from the last frame drawn.
+let marks: Landmarks = face.landmarks();
+
+/** A landmark in window px. */
+function onScreen(p: Point): Point {
+  return { x: buddy.x + p.x, y: buddy.y + p.y };
+}
+
+/** How far the top of his head is below the top of his box (Obesity's sits lower), in px. */
+function headDrop(): number {
+  return Math.max(0, marks.head.y);
+}
+
 let snippetRound = 0; // bumped by stopSinging to cut off a snippet (its own counter, so sing-alongs and snippets don't cut each other off)
 
 /** Sings a short snippet: lyrics in the bubble, sung notes, hops on the beat, floating notes. */
 function sing(): void {
-  if (singing || buddy.busy || invulnerable()) return; // not while gone or crashing out
+  // Not while gone or crashing out, partying, or waiting for an answer to a question.
+  if (isSinging() || partying || speech.asking || buddy.busy || invulnerable()) return;
   const options = snippets(skin);
   const notes = options[Math.floor(Math.random() * options.length)];
-  singing = true;
+  singer = "snippet";
   const round = ++snippetRound; // stopSinging (vanishing, crashing out) cuts it off
   buddy.hold(performance.now(), 60_000);
 
@@ -337,7 +366,7 @@ function sing(): void {
       const vowel = vowelOf(note.syl);
       const mouth: Mouth = note.beats >= 2 || vowel === "o" || vowel === "u" ? "o" : "open";
       face.setMouth(mouth);
-      window.setTimeout(() => face.setMouth("smile"), dur * 900);
+      window.setTimeout(() => round === snippetRound && face.setMouth("smile"), dur * 900);
       if (i % 2 === 0) buddy.hop(0.45);
       const { x, y } = centre();
       emit(stageEl, x + (Math.random() - 0.5) * buddy.w, y, pickGlyph(), skin.particleColor);
@@ -347,7 +376,7 @@ function sing(): void {
   window.setTimeout(() => {
     // Cut off: stopSinging already tidied up, and the bubble may be his crashout line now. Just let him move again.
     if (round !== snippetRound) return buddy.hold(performance.now(), 0);
-    singing = false;
+    singer = null;
     face.setMouth("smile");
     speech.hideLater(1500);
     buddy.hold(performance.now(), 2000);
@@ -412,16 +441,19 @@ function shaken(now: number): void {
 }
 
 function puke(): void {
+  if (gone || untouchable()) return; // vanished (or crashing out) in the meantime
   face.flashEyes("squeeze", 1500);
-  face.setMouth("open");
   voice.bleh();
   say("Bleeeugh 🤮");
+  face.setMouth("open"); // after say(): it's open for the whole spray, not just while the line types
   const dir = cursor && cursor.x < buddy.x + buddy.w / 2 ? -1 : 1;
   let n = 0;
   const spray = window.setInterval(() => {
-    const mouthX = buddy.x + buddy.w / 2 + dir * buddy.w * 0.1;
-    const mouthY = buddy.y + buddy.h * 0.42;
+    const mouth = onScreen(marks.mouth); // spins with him when he tumbles
+    const mouthX = mouth.x + dir * 4;
+    const mouthY = mouth.y;
     for (let i = 0; i < 3; i++) props.push(spawnPuke(stageEl, mouthX, mouthY, dir));
+    face.setMouth("open");
     if (++n >= 28) {
       window.clearInterval(spray);
       face.setMouth("smile");
@@ -466,7 +498,7 @@ function noticed(): void {
 
 function maybePester(now: number): void {
   if (gone || !pesterOn || now - lastNoticed < PESTER_AFTER_MS) return;
-  if (!buddy.grounded || buddy.busy || singing || squeezing) return;
+  if (!buddy.grounded || buddy.busy || isSinging() || partying || squeezing) return;
   lastNoticed = now; // and again after another round of being ignored
   say(pick(["Hey! {user}! Look at me!", "Psst... {user}...", "I'm bored. Play with me!", "Hellooo? Anyone there?"], ctx));
   // Roll over to the cursor if we know where it is (not always possible on Wayland).
@@ -664,6 +696,7 @@ function crashOut(): void {
   refreshCtx();
   stageEl.style.visibility = "";
   vignetteEl.style.visibility = "";
+  moodBeforeCrash = mood;
   setMood("creepy");
   buddy.teleport(cursor ? cursor.x : Math.random() * innerWidth);
   playClass(faceEl, "appear", 400);
@@ -719,7 +752,7 @@ function calmDown(): void {
   regionsDirty = true;
   buddy.physics = { walkSpeed: skin.walkSpeed, bounce: skin.bounce };
   if (gone) return;
-  setMood("friendly");
+  setMood(moodBeforeCrash); // back to how he was (evil mode switched on or off by hand, or by the clock)
   speech.hide();
   say(pick(calmLines, ctx));
   giggle();
@@ -757,7 +790,7 @@ function pet(): void {
   noticed();
   buddy.hold(now, total + 800);
   handEl.classList.add("on");
-  speech.hide();
+  if (!isSinging()) speech.hide();
   face.flashEyes("happy", total + 400);
   voice.squeak();
   window.setTimeout(() => {
@@ -792,7 +825,10 @@ function placeHand(frame: number): void {
   if (handEl.src !== src) handEl.src = src;
   const size = buddy.w / 0.8;
   handEl.style.width = `${size}px`;
-  handEl.style.transform = `translate(${buddy.x - 0.2 * size}px, ${buddy.y + buddy.h - 0.92 * size}px)`;
+  // Over his head where it is now (Obesity's is lower; it sways while he dances).
+  const head = onScreen(marks.head);
+  const top = head.y - 0.035 * buddy.h; // the generator's avatar top, a hair above the top of his head
+  handEl.style.transform = `translate(${head.x - buddy.w / 2 - 0.2 * size}px, ${top - 0.12 * size}px)`;
 }
 
 // ---------- Food, treadmill, getting fat and fit ----------
@@ -803,14 +839,24 @@ let workoutUntil = 0;
 let lastSweat = 0;
 let foodEaten = 0;
 
+/** Food falls somewhere random; chained up, somewhere his chain lets him get to. */
 function dropFood(): void {
-  props.push(spawnFood(stageEl));
+  let x: number | undefined;
+  if (chain.on) {
+    const mid = buddy.x + buddy.w / 2;
+    const spots = Array.from({ length: 24 }, () => 60 + Math.random() * (innerWidth - 120));
+    x = spots.find((s) => buddy.canReach(s)) ?? mid;
+  }
+  props.push(spawnFood(stageEl, x));
 }
 
 function placeTreadmill(): void {
   treadmill?.remove();
   const mid = buddy.x + buddy.w / 2;
-  const x = mid > innerWidth / 2 ? mid - 320 : mid + 320;
+  const away = mid > innerWidth / 2 ? -1 : 1;
+  // Over there, or (chained) the nearest spot he can still get up onto it.
+  const spots = [320, 240, 160].flatMap((d) => [mid + away * d, mid - away * d]).filter((x) => x > 100 && x < innerWidth - 100);
+  const x = spots.find((x) => !chain.on || buddy.canReach(x, innerHeight - TREADMILL_HEIGHT - buddy.h)) ?? Math.max(100, Math.min(innerWidth - 100, mid));
   treadmill = new Treadmill(stageEl, x);
 }
 
@@ -820,7 +866,7 @@ function foods(): Prop[] {
 
 /** Sends him to eat food or use the treadmill when he's free. */
 function runErrands(now: number): void {
-  if (gone || !buddy.grounded || buddy.busy || (singing && !micSinging) || squeezing || now < sickUntil) return; // singing with the mic, he still eats
+  if (gone || !buddy.grounded || buddy.busy || partying || isSinging() || squeezing || now < sickUntil) return; // partying, he stays put
   const mid = buddy.x + buddy.w / 2;
   // Only what his chain lets him get to.
   const snack = foods()
@@ -834,7 +880,7 @@ function runErrands(now: number): void {
   }
 }
 
-let chewingUntil = 0; // his mouth is busy eating: singing and humming leave it alone
+let chewingUntil = 0; // his mouth is busy eating: singing leaves it alone
 
 function eat(food: Prop): void {
   if (food.gone) return;
@@ -889,8 +935,8 @@ function updateWorkout(now: number): void {
   }
   if (now - lastSweat > 450) {
     lastSweat = now;
-    const { x, y } = centre();
-    emit(stageEl, x + (Math.random() - 0.5) * buddy.w * 0.8, y + 10, "💦", "#7cc8ff");
+    const head = onScreen(marks.head);
+    emit(stageEl, head.x + (Math.random() - 0.5) * buddy.w * 0.35, head.y + 12, "💦", "#7cc8ff");
     if (Math.random() < 0.4) voice.huff();
   }
   if (now >= workoutUntil) {
@@ -950,11 +996,11 @@ function updateRegions(): void {
 function placeBubble(): void {
   const w = bubbleEl.offsetWidth;
   const h = bubbleEl.offsetHeight;
-  const mid = buddy.x + buddy.w / 2;
+  const mid = onScreen(marks.head).x; // his head, swaying while he dances
   const left = Math.max(8, Math.min(innerWidth - w - 8, mid - w / 2));
   // Above his head (and his hat), unless he's near the top of the screen.
   const hat = wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2);
-  const above = buddy.y - hat - h - BUBBLE_GAP;
+  const above = buddy.y + headDrop() - hat - h - BUBBLE_GAP;
   const below = above <= 8;
   const top = below ? buddy.y + buddy.h + BUBBLE_GAP : above;
   bubbleEl.style.transform = `translate(${left}px, ${top}px)`;
@@ -1019,6 +1065,7 @@ function frame(now: number): void {
   const towed = chain.on && buddy.state === "idle" && Math.abs(dx) > 0.5;
   const shown: State = dangling ? "idle" : towed ? "walk" : buddy.state;
   face.update(dt, { dx: dangling ? 0 : dx, dy: dangling ? 0 : buddy.y - y0, vx, vy, state: shown, spin });
+  marks = face.landmarks();
   const scare = jumpscare(now);
   if (scare) {
     // Pulled to the middle of the screen as he grows, shaking.
@@ -1030,7 +1077,9 @@ function frame(now: number): void {
   } else {
     buddyEl.style.transform = `translate(${buddy.x}px, ${buddy.y}px)`;
   }
-  chain.draw(scare ? null : { x: buddy.x, y: buddy.y, w: buddy.w, h: buddy.h, fill: BALL_FILL });
+  // Not while he's somewhere else for now (the jumpscare), or popping out of or into view.
+  const morphing = ["vanish", "appear", "morph-grow", "morph-shrink"].some((c) => faceEl.classList.contains(c));
+  chain.draw(scare || morphing ? null : { beltLeft: onScreen(marks.beltLeft), beltRight: onScreen(marks.beltRight), mid: { x: buddy.x + buddy.w / 2, y: buddy.y + buddy.h / 2 } });
 
   for (const p of props) p.step(dt);
   for (let i = props.length - 1; i >= 0; i--) if (props[i].gone) props.splice(i, 1);
@@ -1039,7 +1088,6 @@ function frame(now: number): void {
   updateDance(now);
   updateCrossing();
   updatePlace(now);
-  updateMic(now);
   maybePester(now);
 
   if (speech.visible) placeBubble();
@@ -1053,8 +1101,8 @@ function frame(now: number): void {
     else if (buddy.state === "idle") buddy.hold(now, 1000);
   }
   if (hint.visible) {
-    if (speech.visible || menu.visible || singing || buddy.state === "drag" || invulnerable()) hint.hide();
-    else hint.place(buddy, wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2));
+    if (speech.visible || menu.visible || isSinging() || buddy.state === "drag" || invulnerable()) hint.hide();
+    else hint.place(buddy, wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2) - headDrop());
   }
   if (regionsDirty || buddy.state !== "idle" || speech.visible) updateRegions();
   regionsDirty = false;
@@ -1183,10 +1231,8 @@ let menuAt = { x: 0, y: 0 }; // where he was when the menu opened around him
 
 /** What he's up to, in a few words, for the menu and the name tag. */
 function statusLine(): string {
-  const doing = singing
+  const doing = isSinging()
     ? "singing"
-    : humming
-    ? "humming along"
     : untouchable()
     ? "crashing out"
     : dancing()
@@ -1218,7 +1264,7 @@ function toggleMenu(): void {
   if (menu.visible) return menu.close();
   if (gone || untouchable()) return;
   hint.menuSeen();
-  if (!singing) speech.hide(); // the menu goes all around him; the bubble would be in the way
+  if (!isSinging()) speech.hide(); // the menu goes all around him; the bubble would be in the way
   const creepy = mood === "creepy";
   const hat = wornHeight(worn) * ((SIZE * skin.shape[1] * BALL_FILL) / 2);
   // He stops rolling and waits for the menu (an errand he was on comes back later).
@@ -1232,11 +1278,11 @@ function toggleMenu(): void {
       title: skin.name,
       status: statusLine(),
       items: [
-        { icon: "💬", label: "Talk", key: "t", primary: true, disabled: singing, action: talk },
-        { icon: "♪", label: "Sing", key: "s", disabled: singing || micSinging || buddy.busy, action: sing },
+        { icon: "💬", label: "Talk", key: "t", primary: true, disabled: isSinging(), action: talk },
+        { icon: "♪", label: "Sing", key: "s", disabled: isSinging() || partying || buddy.busy, action: sing },
         { icon: "🍔", label: "Feed", key: "f", action: dropFood },
         { icon: "🏃", label: "Treadmill", key: "r", disabled: buddy.state === "exercise", action: placeTreadmill },
-        { icon: "🎤", label: micOn ? "Put the mic down" : "Microphone", key: "m", action: toggleMic },
+        { icon: "🎤", label: micOn ? "Put the mic down" : "Microphone", key: "m", disabled: !micOn && !music.playing, action: toggleMic }, // nothing to sing to
         { icon: "⛓", label: chain.on ? "Unchain" : "Chain", key: chain.on ? "u" : "h", action: toggleChain },
         {
           icon: creepy ? "😊" : "😈",
@@ -1256,76 +1302,47 @@ function toggleMenu(): void {
 }
 
 // ---------- Microphone ----------
-// With the mic on he sings along to whatever's playing, wherever he is: the
-// lyrics line by line when Sing along may look them up and finds them, else he
-// hums along (his mouth on the beat, notes floating up). Saved.
+// With the mic on he parties wherever he is, exactly as on the music app's
+// window (see updatePlace). The mic is in his hand (see Face.setMic). Only
+// while music plays: he picks it up then, and puts it down once it stops. Saved.
 
 let micOn = load("mic") === "1";
-let micSinging = false; // the mic is what has him singing right now
-let humming = false;
-let humBeat = -1;
-let lastHumNote = 0;
-micEl.classList.toggle("hidden", !micOn);
+let silentSince = 0; // when the music stopped (0: it's playing)
+face.setMic(micOn);
+
+function setMic(on: boolean): void {
+  micOn = on;
+  save("mic", on ? "1" : "0");
+  face.setMic(on);
+  stopSinging(); // whatever he was singing; the party's karaoke picks up again once he's said this
+}
 
 function toggleMic(): void {
-  micOn = !micOn;
-  save("mic", micOn ? "1" : "0");
-  micEl.classList.toggle("hidden", !micOn);
+  if (!micOn && !music.playing) return say(!musicOn ? "Turn Music on in Settings so I can hear your songs!" : "Put some music on first! ♪");
+  setMic(!micOn);
   if (micOn) {
     if (setting("lyrics")) void music.loadLyrics();
-    say(music.playing ? "Ooh, I know this one! ♪" : "Testing, testing... one, two! ♪ Put some music on!");
+    say("Ooh, I know this one! ♪");
   } else {
-    stopMicSinging();
-    say("Okay, okay. No more singing. ☺");
+    // On the music app's window he keeps partying, mic or not.
+    say(onPlayerWindow() ? "I'll still sing on here, though! ♪" : "Okay, okay. No more singing. ☺");
   }
 }
 
-/** Each frame: the mic has him singing along while music plays (the music app's party has its own). */
+/** Each frame: the music's been off a while, so the mic goes down. */
 function updateMic(now: number): void {
-  // Not while he's singing something else (a song he was asked for, or a sing-along): he takes over after.
-  const on = micOn && !partying && !(singing && !micSinging) && music.playing && !!music.track && !gone && !untouchable();
-  micEl.classList.toggle("live", on && (singing || humming));
-  if (!on) return stopMicSinging();
-  micSinging = true;
-  const lyricsAllowed = setting("lyrics");
-  if (lyricsAllowed) void music.loadLyrics(); // once per song
-  if (lyricsAllowed && music.lyrics && music.position() !== null) {
-    stopHum();
-    karaoke();
-  } else if (!lyricsAllowed || music.lyricsDone) {
-    hum(now); // no lyrics to be had (or nowhere to follow them): hum instead
-  } else stopHum(); // the next song's lyrics are on their way
-}
-
-function stopMicSinging(): void {
-  if (!micSinging) return;
-  micSinging = false;
-  stopHum();
-  if (!partying) endKaraoke();
-}
-
-/** Mouth open and shut on the beat (about twice a second without a tempo), a note now and then. */
-function hum(now: number): void {
-  if (speech.visible && !singing) return stopHum(); // talking: no humming over it
-  humming = true;
-  const beat = music.beat();
-  const b = beat !== null ? Math.floor(beat) : Math.floor(now / 450);
-  if (b !== humBeat && now >= chewingUntil) {
-    humBeat = b;
-    face.setMouth(b % 2 ? "o" : "smile");
-  }
-  if (now - lastHumNote > HUM_NOTE_MS) {
-    lastHumNote = now;
-    const { x, y } = centre();
-    emit(stageEl, x + buddy.w * 0.3, y, pickGlyph(), skin.particleColor);
+  if (music.playing) silentSince = 0;
+  else if (!silentSince) silentSince = now;
+  else if (micOn && now - silentSince > MIC_DROP_MS) {
+    setMic(false);
+    if (!gone && mayChat()) say("Show's over! ♪");
   }
 }
 
-function stopHum(): void {
-  if (!humming) return;
-  humming = false;
-  humBeat = -1;
-  face.setMouth("smile");
+/** He's on the window of the app that's playing music (where he parties even without the mic). */
+function onPlayerWindow(): boolean {
+  const t = music.track;
+  return !!t && !!ctx.place && sameApp(t.player, ctx.place.app);
 }
 
 // ---------- Chain ----------
@@ -1523,6 +1540,7 @@ function updateCrossing(): void {
     ownerDraws: held && !hopping,
     skin: skin.id,
     worn,
+    mic: micOn,
     cls: faceEl.className,
     x: physicalX(buddy.x)!,
     bottom: (innerHeight - buddy.y - buddy.h) * cur.scale,
@@ -1721,7 +1739,7 @@ onAppWindows((list) => {
 });
 window.addEventListener("resize", () => updatePlaces(false));
 
-/** Each frame: where he is, and the party on the music app's window. */
+/** Each frame: where he is, and the party on the music app's window (or anywhere, with the mic). */
 function updatePlace(now: number): void {
   // Standing on a window: follow it every frame, in case it's being dragged.
   const onWindow = !gone && (buddy.standingOn !== null || buddy.container !== null);
@@ -1744,14 +1762,16 @@ function updatePlace(now: number): void {
     if (Math.random() < PLACE_REMARK_CHANCE && free() && mayChat()) say(pick(placeLines[mood][place.on], ctx));
   }
 
+  // With the mic he parties wherever he is.
   const t = music.track;
   const party =
-    !!place && !!t && music.playing && sameApp(t.player, place.app) &&
+    !!t && music.playing && (micOn || (!!place && sameApp(t.player, place.app))) &&
     !gone && !untouchable() && !pushing() && buddy.state !== "drag" && buddy.state !== "exercise";
   if (party) {
     if (!partying) {
       partying = true;
       window.clearTimeout(singAlongTimer);
+      cutOffSongs(); // the party's karaoke takes over the bubble
       if (setting("lyrics")) void music.loadLyrics();
     }
     if (buddy.grounded) buddy.hold(now, 600); // stays until he's moved off
@@ -1760,7 +1780,9 @@ function updatePlace(now: number): void {
   } else if (partying) {
     partying = false;
     endKaraoke();
+    if (!music.playing) stopDance(); // the music stopped: back to normal right away
   }
+  updateMic(now);
 }
 
 /** On the music app's window: every lyric line in the bubble as it comes up. */
@@ -1773,6 +1795,8 @@ function karaoke(): void {
   let i = -1;
   while (i + 1 < lines.length && lines[i + 1].t <= pos + 0.15) i++;
   if (i === karaokeLine) return;
+  // Something he just said (or a question) is in the bubble: the lyrics wait until it's gone.
+  if (speech.visible && singer !== "karaoke") return;
   karaokeLine = i;
   karaokeKey = key;
   window.clearInterval(karaokeMouth);
@@ -1780,10 +1804,10 @@ function karaoke(): void {
   const line = lines[i];
   // Between verses (or before the first line) the bubble goes away.
   if (!line || pos - line.t > 8) {
-    if (singing) speech.hideLater(300);
+    if (singer === "karaoke") speech.hideLater(300);
     return;
   }
-  singing = true; // keeps other chatter out of the bubble
+  singer = "karaoke"; // keeps other chatter out of the bubble
   speech.show(`♪ ${line.text} ♪`, mood);
   regionsDirty = true;
   const until = performance.now() + Math.min(LYRIC_LINE_MAX_MS, ((lines[i + 1]?.t ?? line.t + 4) - line.t) * 1000);
@@ -1800,9 +1824,9 @@ function karaoke(): void {
 
 function endKaraoke(): void {
   window.clearInterval(karaokeMouth);
-  face.setMouth("smile");
-  if (karaokeLine !== -1 || singing) {
-    singing = false;
+  if (singer === "karaoke") {
+    singer = null;
+    face.setMouth("smile");
     speech.hideLater(500);
   }
   karaokeLine = -1;
@@ -1888,7 +1912,7 @@ function sayWhenFree(line: () => string, still: () => boolean, tries = 6): void 
 
 /** Not busy with anything else, so he can start something new. */
 function free(): boolean {
-  return !speech.visible && !singing && !humming && !buddy.busy && !gone && !pushing() && !untouchable() && buddy.state === "idle";
+  return !speech.visible && !isSinging() && !buddy.busy && !gone && !pushing() && !untouchable() && buddy.state === "idle";
 }
 
 function dancing(): boolean {
@@ -1955,7 +1979,7 @@ function singAlong(key: string | null = music.track && songKey(music.track), tri
   const nearlyOver = pos !== null && t.duration !== null && pos > t.duration - 20;
   if (nearlyOver || (lines === null && music.lyricsDone)) return; // too late, or no lyrics for this song
   const ready = lines !== null && pos !== null;
-  const busy = gone || singing || partying || micSinging || untouchable() || pushing() || hopping || buddy.state === "drag" || buddy.state === "fall";
+  const busy = gone || isSinging() || speech.visible || partying || untouchable() || pushing() || hopping || buddy.state === "drag" || buddy.state === "fall";
   if (!ready || busy) {
     if (tries > 1) singAlongTimer = window.setTimeout(() => singAlong(key, tries - 1), 3000);
     return;
@@ -1972,26 +1996,39 @@ let singRound = 0; // bumped to cut off a sing-along that's in progress
 
 /** Stop any singing along right now (he's crashing out, or vanished). */
 function stopSinging(): void {
-  singRound++;
-  snippetRound++;
+  cutOffSongs();
   window.clearTimeout(singAlongTimer);
   endKaraoke();
-  singing = false;
+  singer = null;
   face.setMouth("smile");
 }
+
+/** Cut off a song he was asked for and a sing-along (a party's karaoke takes over, or he's stopping). */
+function cutOffSongs(): void {
+  singRound++;
+  snippetRound++;
+  window.clearInterval(singAlongMouth);
+  if (singer === "snippet" || singer === "singalong") {
+    singer = null;
+    speech.hide(); // their line goes with them (it never hides by itself)
+    face.setMouth("smile");
+  }
+}
+
+let singAlongMouth = 0;
 
 function sungLines(lines: LyricLine[], endT: number | null, pos: number): void {
   const key = music.track && songKey(music.track);
   dance(60_000);
-  singing = true;
-  let mouthTimer = 0;
+  singer = "singalong";
   let over = false;
   const round = ++singRound;
   const done = () => {
-    window.clearInterval(mouthTimer);
+    window.clearInterval(singAlongMouth);
     if (over) return;
     over = true;
-    singing = false;
+    if (singer !== "singalong") return;
+    singer = null;
     if (dancing()) danceUntil = Math.min(danceUntil, performance.now() + 8000); // dance a little more, then stop
     face.setMouth("smile");
     speech.hideLater(800);
@@ -2001,22 +2038,21 @@ function sungLines(lines: LyricLine[], endT: number | null, pos: number): void {
     window.setTimeout(() => {
       if (over) return;
       if (round !== singRound) {
-        over = true; // cut off (crashout): stopSinging already tidied up
-        window.clearInterval(mouthTimer);
+        over = true; // cut off (crashout, a party): already tidied up
         return;
       }
       if (!music.playing || gone || (music.track && songKey(music.track)) !== key) return done();
       speech.show(`♪ ${line.text} ♪`, mood);
       regionsDirty = true;
-      window.clearInterval(mouthTimer);
+      window.clearInterval(singAlongMouth);
       const mouths: Mouth[] = ["open", "o", "smile", "open"];
       let m = 0;
-      mouthTimer = window.setInterval(() => face.setMouth(mouths[m++ % mouths.length]), 160);
+      singAlongMouth = window.setInterval(() => face.setMouth(mouths[m++ % mouths.length]), 160);
       const lineMs = Math.min(LYRIC_LINE_MAX_MS, (next - line.t) * 1000);
       window.setTimeout(() => {
         if (over) return;
-        window.clearInterval(mouthTimer);
-        if (round !== singRound) return void (over = true); // cut off mid-line: stopSinging already tidied up
+        if (round !== singRound) return void (over = true); // cut off mid-line: already tidied up
+        window.clearInterval(singAlongMouth);
         face.setMouth("smile");
         if (i === lines.length - 1) done();
       }, lineMs);
@@ -2032,6 +2068,7 @@ async function refreshPc(): Promise<void> {
 // Changes made in the settings window. Autostart is applied there; the
 // jumpscare setting is read when it's needed.
 onSetting((key, on) => {
+  if (singer === "karaoke") endKaraoke(); // room in the bubble to answer; the party's lyrics pick up again after
   if (key === "sound") {
     voice.muted = !on;
     say(on ? "I can sing again! ♪" : "Okay, I'll be quiet... tee hee");
@@ -2092,7 +2129,7 @@ window.addEventListener("resize", () => (regionsDirty = true));
 
 function scheduleIdleChatter(): void {
   window.setTimeout(() => {
-    if (!speech.visible && !singing && !humming && !buddy.busy && !invulnerable()) {
+    if (!speech.visible && !isSinging() && !partying && !buddy.busy && !invulnerable()) {
       if (Math.random() < EXPLORE_CHANCE && explore()) {
         /* off to visit a window */
       } else if (Math.random() < ROAM_CHANCE) roam();
@@ -2137,7 +2174,7 @@ async function start(): Promise<void> {
         music,
         toggleMic,
         toggleChain,
-        get mic() { return { on: micOn, singing, humming, micSinging, line: karaokeLine }; },
+        get mic() { return { on: micOn, partying, singer, line: karaokeLine }; },
         view: () => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }),
       },
     });
@@ -2149,11 +2186,15 @@ async function start(): Promise<void> {
       verity: {
         sing,
         talk,
+        toggleMic,
+        toggleChain,
+        pet,
         dropFood,
         placeTreadmill,
         skin: (id: string) => isSkinId(id) && applySkin(SKINS[id]),
         teleport: (x: number) => buddy.teleport(x),
         hitRects: () => menu.hitRects(),
+        marks: () => marks,
       },
     });
     const params = new URLSearchParams(location.search);
@@ -2177,6 +2218,7 @@ async function start(): Promise<void> {
         music.update({ title: "Get Lucky", artist: "Daft Punk", album: "Random Access Memories", duration: 248, position: 40, playing: true, player: "Spotify" }),
       pause: () => music.track && music.update({ ...music.track, position: music.position(), playing: false }),
       dance: () => dance(),
+      mic: toggleMic,
       singalong: () => singAlong(),
       pc: () => {
         ctx.pc = { os: "Windows 11 Pro", cpu: "AMD Ryzen 7 9700X", cores: 16, cpu_load: 57, ram_used_gb: 9.4, ram_total_gb: 32, top_app: ["Chrome", 3.2], battery: [18, false] };

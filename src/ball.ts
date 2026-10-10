@@ -375,6 +375,9 @@ export class BallBody implements Body {
   readonly object = new THREE.Group(); // skin proportions
   readonly halfExtents: [number, number];
   readonly anchors: Record<Slot, THREE.Object3D>;
+  readonly hand: THREE.Object3D;
+  readonly marks: Body["marks"];
+  private readonly held: THREE.Group; // upright, turning with his look
   private readonly ball: THREE.Mesh;
   private readonly material: THREE.MeshStandardMaterial;
   private readonly textures = new FaceTextures();
@@ -396,6 +399,27 @@ export class BallBody implements Body {
     neck.rotation.x = -0.75;
     this.ball.add(neck);
     this.anchors = { head: this.ball, face: this.ball, neck };
+    // The mic: below one corner of his smile, leaning in so its head is at his mouth.
+    // It doesn't roll with the ball: it only turns where his face turns to look.
+    this.held = new THREE.Group();
+    this.hand = new THREE.Group();
+    this.hand.position.set(0.38, -0.72, 0.8);
+    this.hand.rotation.set(0.35, 0, 0.55);
+    this.held.add(this.hand);
+    this.object.add(this.held);
+    // The top of his head and a belt round his middle stay put while he rolls; his mouth goes round with his face.
+    const mark = (parent: THREE.Object3D, x: number, y: number, z: number) => {
+      const o = new THREE.Object3D();
+      o.position.set(x, y, z);
+      parent.add(o);
+      return o;
+    };
+    this.marks = {
+      head: mark(this.object, 0, 1, 0),
+      mouth: mark(this.ball, 0, -0.33, 0.94),
+      beltLeft: mark(this.object, -0.95, -0.42, 0),
+      beltRight: mark(this.object, 0.95, -0.42, 0),
+    };
   }
 
   setLook(l: Look): void {
@@ -405,6 +429,7 @@ export class BallBody implements Body {
 
   /** Rolls while moving or spinning on the spot; otherwise turns to face where it's looking. */
   update(dt: number, m: Motion, look: THREE.Quaternion): void {
+    this.held.quaternion.slerp(look, 1 - Math.exp(-dt * 5));
     const radiusPx = this.ppu * this.skin.shape[0];
     if (m.spin) {
       this.step.setFromAxisAngle(X_AXIS, m.spin / radiusPx);

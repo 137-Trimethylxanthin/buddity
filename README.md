@@ -18,7 +18,7 @@ Runs on **Windows, Linux and macOS**. Download the newest `verity-v…` release 
 
 Hover over him for a moment and a little tag reminds you of all this.
 
-- **Microphone:** right-click → 🎤 Microphone. He holds a mic and sings along to whatever you're playing, wherever he is: every line of the lyrics when "Sing along" finds them, otherwise he hums to the beat. Right-click → Put the mic down to stop.
+- **Microphone:** right-click → 🎤 Microphone. He holds a mic up to his mouth and, whenever music's playing, does exactly what he does on the music app's window, wherever he is: stays put, dances and sings every line (when "Sing along" finds the lyrics). Only while music plays: he puts the mic down by himself a few seconds after it stops (and the menu item is greyed out until something plays). Right-click → Put the mic down to stop sooner.
 - **Chain:** right-click → ⛓ Chain puts a chain round him, bolted to the floor next to him. Drag the bolt anywhere (drop it on a window and it moves with that window), scroll on it to make the chain longer or shorter. He can't get any further than the chain lets him: he stops at its end, swings when thrown, and dangles if you hang the bolt up high. Right-click → Unchain sets him free. He remembers both after a restart.
 - **Food:** feed normal Verity 3 pieces and he turns into Obesity. The **treadmill** slims him back down.
 - **Skins:** Verity, Falsity, Lovity, Obesity, Freakity, Goonity. Pick one in Settings (right-click → 👒 Wardrobe & skins).

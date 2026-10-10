@@ -13,11 +13,30 @@ const BASE_Y = -0.9; // where the bottom starts flattening (unit-sphere space)
 const BASE_SQUASH = 0.55; // how much the bottom cap is flattened
 const BOTTOM_Y = BASE_Y - (1 + BASE_Y) * BASE_SQUASH; // lowest point after flattening
 const STEP_PX = 18; // waddle cycle length factor
+const MIC_ARM = [-0.9, -0.35]; // radians forward and in: the arm that holds the mic
 const TUMBLE_SPEED = 700; // px/s sideways throw that sends him spinning
 const NAVEL = new THREE.Vector3(0, -0.36, 0.93).normalize();
 
 function bump(y: number, centre: number, width: number): number {
   return Math.exp(-(((y - centre) / width) ** 2));
+}
+
+const BELT_Y = -0.3; // where a belt (the chain) goes round him
+const MOUTH_Y = 0.2;
+
+/** Of his shape: the top, how far out his sides are at height y, and how far forward his face is at height y2. */
+function measure(geo: THREE.BufferGeometry, y: number, y2: number): { top: number; width: number; front: number } {
+  const pos = geo.attributes.position;
+  let top = 0;
+  let width = 0;
+  let front = 0;
+  for (let i = 0; i < pos.count; i++) {
+    const [px, py, pz] = [pos.getX(i), pos.getY(i), pos.getZ(i)];
+    top = Math.max(top, py);
+    if (Math.abs(py - y) < 0.03) width = Math.max(width, Math.abs(px));
+    if (Math.abs(py - y2) < 0.03 && Math.abs(px) < 0.05) front = Math.max(front, pz);
+  }
+  return { top, width, front };
 }
 
 /** A unit sphere pushed and pulled into Obesity's shape. UVs are kept, so the face texture still fits. */
@@ -64,6 +83,8 @@ export class BlobBody implements Body {
   readonly object = new THREE.Group();
   readonly halfExtents: [number, number];
   readonly anchors: Record<Slot, THREE.Object3D>;
+  readonly hand = new THREE.Group();
+  readonly marks: Body["marks"];
 
   private readonly pose = new THREE.Group();
   private readonly arms: THREE.Group[] = [];
@@ -99,7 +120,8 @@ export class BlobBody implements Body {
 
     const shaped = new THREE.Group();
     shaped.scale.set(sx, sy, (sx + sy) / 2);
-    const body = new THREE.Mesh(blobGeometry(), this.material);
+    const geo = blobGeometry();
+    const body = new THREE.Mesh(geo, this.material);
     shaped.add(body);
     this.meshes.push(body);
 
@@ -125,6 +147,26 @@ export class BlobBody implements Body {
       this.arms.push(arm);
       shaped.add(arm);
     }
+    // The mic: held up in front of his belly, its head at his mouth.
+    this.hand.position.set(0.22, -0.2, 1.1);
+    this.hand.rotation.set(-0.1, 0, 0.35);
+    this.hand.scale.setScalar(0.8);
+    shaped.add(this.hand);
+
+    // The top of his head, his mouth (in the dot face, above the chin roll) and a belt round his belly, read off his shape.
+    const at = (x: number, y: number, z: number) => {
+      const o = new THREE.Object3D();
+      o.position.set(x, y, z);
+      shaped.add(o);
+      return o;
+    };
+    const { top, width, front } = measure(geo, BELT_Y, MOUTH_Y);
+    this.marks = {
+      head: at(0, top, 0),
+      mouth: at(0, MOUTH_Y, front),
+      beltLeft: at(-width * 1.03, BELT_Y, 0),
+      beltRight: at(width * 1.03, BELT_Y, 0),
+    };
 
     // He doesn't roll, so everything he wears sits on the shaped body. His dot
     // eyes are smaller and higher than Verity's, so face items shrink and move up.
@@ -188,7 +230,10 @@ export class BlobBody implements Body {
       let out = 0.2 + (moving ? 0.35 * Math.abs(Math.sin(this.phase * 2)) : 0.05 * Math.sin(t * 2.4));
       if (falling) out = 1.3 + Math.sin(t * 22 + i * 2) * 0.5; // flail
       if (m.state === "drag") out = 2.3 + Math.sin(t * 8 + i) * 0.25; // arms up
-      arm.rotation.z = side * out;
+      // Holding the mic: that arm stays up in front of him, the mic at his mouth.
+      const mic = i === 1 && this.hand.children.length > 0 && !falling && m.state !== "drag";
+      arm.rotation.x = mic ? MIC_ARM[0] : 0;
+      arm.rotation.z = mic ? MIC_ARM[1] : side * out;
     });
   }
 

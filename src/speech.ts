@@ -17,6 +17,7 @@ export class Speech {
   private readonly choices: HTMLElement;
   private typing = 0;
   private hideTimer = 0;
+  private question = false; // the line on show asks something (its buttons come once it's typed)
 
   constructor(
     private readonly bubble: HTMLElement,
@@ -30,6 +31,11 @@ export class Speech {
     return !this.bubble.classList.contains("hidden");
   }
 
+  /** A question is up, waiting for an answer. */
+  get asking(): boolean {
+    return this.visible && this.question;
+  }
+
   private open(mood: Mood): void {
     window.clearInterval(this.typing);
     window.clearTimeout(this.hideTimer);
@@ -40,6 +46,7 @@ export class Speech {
 
   say(line: string, mood: Mood, choices: string[] = [], onChoice?: (c: string) => void): void {
     this.open(mood);
+    this.question = choices.length > 0;
     this.text.textContent = "";
     this.hooks.onTalking(true);
     this.hooks.onLayout();
@@ -81,6 +88,7 @@ export class Speech {
   /** Show text instantly and keep it up (used while singing). */
   show(text: string, mood: Mood): void {
     this.open(mood);
+    this.question = false;
     this.text.textContent = text;
     this.hooks.onLayout();
   }

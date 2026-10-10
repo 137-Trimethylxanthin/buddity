@@ -201,6 +201,22 @@ const BUILD: Record<AccessoryId, () => THREE.Group> = {
   bowtie,
 };
 
+/**
+ * A handheld microphone (mic mode), its grip at the origin and its head up +y.
+ * The body's hand anchor holds it and tips it towards his mouth.
+ */
+export function buildMic(): THREE.Group {
+  const g = new THREE.Group();
+  const black = mat(0x26262b, { roughness: 0.45 });
+  const steel = mat(0xb9bec7, { metalness: 0.8, roughness: 0.3 });
+  g.add(mesh(new THREE.CylinderGeometry(0.075, 0.05, 0.55, 20), black, 0, 0.1, 0));
+  g.add(mesh(new THREE.CylinderGeometry(0.095, 0.08, 0.09, 20), steel, 0, 0.4, 0));
+  // The grille: a ball with a wire mesh over it.
+  g.add(mesh(new THREE.SphereGeometry(0.15, 24, 16), mat(0x8b9099, { metalness: 0.7, roughness: 0.55 }), 0, 0.54, 0));
+  g.add(mesh(new THREE.SphereGeometry(0.152, 18, 8), mat(0x595e66, { metalness: 0.6, roughness: 0.4, wireframe: true }), 0, 0.54, 0));
+  return g;
+}
+
 /** A fresh model of the accessory. */
 export function buildAccessory(id: AccessoryId): THREE.Group {
   return BUILD[id]();

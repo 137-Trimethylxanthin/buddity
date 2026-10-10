@@ -73,10 +73,13 @@ export class Prop {
   }
 }
 
+export const TREADMILL_HEIGHT = 28; // top of the belt Verity stands on
+
 export const FOODS = ["🍔", "🍕", "🍩", "🍗", "🍟", "🌭", "🧁", "🍰"];
 
-export function spawnFood(stage: HTMLElement): Prop {
-  const p = new Prop(stage, "food", 60 + Math.random() * (innerWidth - 120), -60, [Math.random() * 300 - 150, 0]);
+/** Food falling from the top of the screen: anywhere, or straight down at x. */
+export function spawnFood(stage: HTMLElement, x?: number): Prop {
+  const p = new Prop(stage, "food", x ?? 60 + Math.random() * (innerWidth - 120), -60, [x === undefined ? Math.random() * 300 - 150 : 0, 0]);
   p.el.textContent = FOODS[Math.floor(Math.random() * FOODS.length)];
   return p;
 }
@@ -101,7 +104,7 @@ export function spawnPuke(stage: HTMLElement, x: number, y: number, dir: number)
 export class Treadmill {
   readonly el: HTMLElement;
   readonly width = 240;
-  readonly height = 28; // top of the belt Verity stands on
+  readonly height = TREADMILL_HEIGHT;
   used = false;
 
   constructor(

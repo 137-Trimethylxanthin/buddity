@@ -197,6 +197,8 @@ export interface MirrorFrame {
   ownerDraws: boolean;
   skin: SkinId;
   worn: AccessoryId[];
+  /** Holding the microphone. */
+  mic: boolean;
   /** His element's classes (evil glow, dangling while held). */
   cls: string;
   /** Physical x of his box's left edge on the desktop. */

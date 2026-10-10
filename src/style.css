@@ -437,33 +437,6 @@ body {
 }
 #hand.on { display: block; }
 
-/* ---------- Microphone ---------- */
-
-/* Held up in front of him, leaning in towards his mouth; it stays upright while he rolls. */
-#mic {
-  position: absolute;
-  left: 61%;
-  top: 43%;
-  width: 19%;
-  pointer-events: none;
-  transform: rotate(-28deg);
-  transform-origin: 50% 90%;
-  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.35));
-  transition: opacity 0.25s, transform 0.25s;
-}
-#mic.hidden { opacity: 0; transform: rotate(-28deg) translateY(30%); }
-#mic.live { animation: mic-sway 0.9s ease-in-out infinite alternate; }
-#mic svg { display: block; width: 100%; overflow: visible; }
-.mic-handle { fill: #26262b; }
-.mic-band { fill: #b9bec7; }
-.mic-head { fill: #595e66; stroke: #9aa0a9; stroke-width: 2.5; }
-.mic-grille { fill: none; stroke: #8b9099; stroke-width: 1.4; }
-.mic-shine { fill: rgb(255 255 255 / 0.35); }
-@keyframes mic-sway {
-  from { transform: rotate(-32deg); }
-  to { transform: rotate(-22deg); }
-}
-
 /* ---------- Chain ---------- */
 
 .chain-layer {

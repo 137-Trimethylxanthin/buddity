@@ -52,6 +52,7 @@ const PREVIEW_SIZE = 100;
 const IDLE: Motion = { dx: 0, dy: 0, vx: 0, vy: 0, state: "idle" };
 const previewEl = document.getElementById("preview")!;
 const preview = new Face(previewEl, PREVIEW_SIZE, SKINS[skin]);
+preview.setMic(load("mic") === "1");
 let last = performance.now();
 requestAnimationFrame(function frame(now) {
   preview.update(Math.min(0.05, (now - last) / 1000), IDLE);
@@ -64,8 +65,10 @@ document.documentElement.addEventListener("pointerleave", () => {
   preview.lookAt(box.left + box.width / 2, box.top + box.height / 2);
 });
 
-// A skin picked elsewhere (the tray, or Obesity after a feast): the shared storage tells this window.
+// A skin picked elsewhere (the tray, or Obesity after a feast), or the mic: the shared storage tells this window.
 window.addEventListener("storage", (e) => {
+  if (e.key === "mic") return preview.setMic(e.newValue === "1"); // picked up or put down in his menu
+  if (e.key === "jumpscareSeen") return void (box("jumpscare").closest("label")!.hidden = e.newValue !== "1"); // he just crashed out
   if (e.key !== "skin" || !e.newValue || !isSkinId(e.newValue) || e.newValue === skin) return;
   skin = e.newValue;
   showSkin();

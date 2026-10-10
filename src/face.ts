@@ -5,7 +5,7 @@ import { BlobBody } from "./blob";
 import type { Side, State } from "./buddy";
 import type { Mood } from "./lines";
 import type { Skin } from "./skins";
-import { buildAccessory, disposeAccessory } from "./accessories";
+import { buildAccessory, buildMic, disposeAccessory } from "./accessories";
 import { ACCESSORIES, type AccessoryId, type Slot } from "./wardrobe";
 
 // The 3D character: scene, lights, a squash-and-stretch spring shared by every
@@ -39,6 +39,10 @@ export interface Body {
   readonly halfExtents: [number, number];
   /** Where accessories go, per wardrobe slot. */
   readonly anchors: Record<Slot, THREE.Object3D>;
+  /** Where he holds the microphone: by his mouth, tipped towards it. */
+  readonly hand: THREE.Object3D;
+  /** Points on him that things drawn over him in the page follow (see Face.landmarks). */
+  readonly marks: Record<"head" | "mouth" | "beltLeft" | "beltRight", THREE.Object3D>;
   setLook(l: Look): void;
   /** Multiply the body colour (e.g. green when sick); null restores it. */
   setTint(color: THREE.Color | null): void;
@@ -84,6 +88,22 @@ export interface FacePose {
   look: { mood: Mood; eyes: Eyes; mouth: Mouth; grin: number };
   tint: "sick" | "creepy" | null;
   walls: [number, number, number, number];
+}
+
+/** A point in CSS px from the top left of his box. */
+export type Point = { x: number; y: number };
+
+/**
+ * Where his parts are on screen this frame, from the top left of his box: the
+ * top of his head, his mouth, the ends of a belt round his middle (it tilts and
+ * squashes with him), and the head of the mic when he holds one.
+ */
+export interface Landmarks {
+  head: Point;
+  mouth: Point;
+  beltLeft: Point;
+  beltRight: Point;
+  mic: Point | null;
 }
 
 /** What he's pressed against: a screen edge or both hands. snap skips the spring (frame-exact, for petting). */
@@ -133,6 +153,10 @@ export class Face {
   private readonly mold = new Mold();
   private push: [number, number] | null = null; // px pushed into the screen edges (x right, y down)
   private readonly worn = new Map<AccessoryId, THREE.Object3D>();
+  private mic: THREE.Object3D | null = null;
+  private readonly micTip = new THREE.Object3D(); // the mic's head
+  private canvasBox = { left: 0, top: 0, w: 1, h: 1 };
+  private readonly v = new THREE.Vector3();
   private dancing = false;
   private beat = 0; // beats danced so far
   private beatSource: (() => number | null) | null = null;
@@ -186,6 +210,7 @@ export class Face {
     const canvas = this.renderer.domElement;
     canvas.style.left = `${(w - cw) / 2}px`;
     canvas.style.top = `${(h - ch) / 2}px`;
+    this.canvasBox = { left: (w - cw) / 2, top: (h - ch) / 2, w: cw, h: ch };
     Object.assign(this.camera, {
       left: -cw / 2 / this.ppu,
       right: cw / 2 / this.ppu,
@@ -196,6 +221,7 @@ export class Face {
 
     if (this.body) {
       for (const obj of this.worn.values()) obj.removeFromParent(); // keep them for the new body
+      this.mic?.removeFromParent();
       this.unrotate.remove(this.body.object);
       this.body.dispose();
     }
@@ -231,13 +257,35 @@ export class Face {
     this.dress();
   }
 
-  /** (Re)attach what he wears, always in wardrobe order, so mirrors get the same scene layout. */
+  /** Hold the microphone (mic mode), or put it down. */
+  setMic(on: boolean): void {
+    if (on === !!this.mic) return;
+    if (this.mic) {
+      this.mic.removeFromParent();
+      disposeAccessory(this.mic);
+      this.mic = null;
+    } else {
+      this.mic = buildMic();
+      this.micTip.position.set(0, 0.54, 0);
+      this.mic.add(this.micTip);
+      this.mic.traverse((o) => {
+        if (o instanceof THREE.Mesh) for (const m of [o.material].flat()) this.mold.apply(m);
+      });
+    }
+    this.dress();
+  }
+
+  /** (Re)attach what he wears, always in wardrobe order and the mic last, so mirrors get the same scene layout. */
   private dress(): void {
     for (const a of ACCESSORIES) {
       const obj = this.worn.get(a.id);
       if (!obj) continue;
       obj.removeFromParent();
       this.body.anchors[a.slot].add(obj);
+    }
+    if (this.mic) {
+      this.mic.removeFromParent();
+      this.body.hand.add(this.mic);
     }
   }
 
@@ -264,11 +312,11 @@ export class Face {
     };
   }
 
-  /** Draw a frame taken from another Face with the same skin and accessories (a mirror). */
-  showPose(p: FacePose): void {
+  /** Draw a frame taken from another Face with the same skin and accessories (a mirror). False if it couldn't. */
+  showPose(p: FacePose): boolean {
     const objects: THREE.Object3D[] = [];
     this.scene.traverse((o) => void objects.push(o));
-    if (objects.length * 10 !== p.transforms.length) return; // still dressing differently; skip this frame
+    if (objects.length * 10 !== p.transforms.length) return false; // dressed differently; skip this frame
     objects.forEach((o, i) => {
       const t = p.transforms.slice(i * 10, i * 10 + 10);
       o.position.fromArray(t, 0);
@@ -288,6 +336,25 @@ export class Face {
     this.body.setTint(p.tint === "sick" ? SICK_TINT : p.tint === "creepy" ? CREEPY_TINT : null);
     this.mold.walls = p.walls;
     this.renderer.render(this.scene, this.camera);
+    return true;
+  }
+
+  /** Where his parts are on screen, as last drawn. */
+  landmarks(): Landmarks {
+    this.scene.updateMatrixWorld();
+    const at = (o: THREE.Object3D): Point => {
+      o.getWorldPosition(this.v).project(this.camera);
+      const c = this.canvasBox;
+      return { x: c.left + ((this.v.x + 1) / 2) * c.w, y: c.top + ((1 - this.v.y) / 2) * c.h };
+    };
+    const m = this.body.marks;
+    return {
+      head: at(m.head),
+      mouth: at(m.mouth),
+      beltLeft: at(m.beltLeft),
+      beltRight: at(m.beltRight),
+      mic: this.mic ? at(this.micTip) : null,
+    };
   }
 
   /** Turn towards a position given in window CSS pixels. */

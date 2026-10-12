@@ -1,4 +1,4 @@
-import type { PcInfo, Track } from "./native";
+import type { PcInfo, Snoop, Track } from "./native";
 import type { Skin } from "./skins";
 
 export type Mood = "friendly" | "creepy";
@@ -22,6 +22,8 @@ export interface Context {
   stats: Stats;
   /** The computer: OS, CPU, RAM, hungriest app, battery. Null until known. */
   pc: PcInfo | null;
+  /** What he's found snooping around (apps, games, websites, downloads). Null until known, or with Snoop around off. */
+  snoop: Snoop | null;
   /** The song that's playing or paused, if any. */
   music: Track | null;
   /** The app window he's in front of or standing on (app name only), if known. */
@@ -56,7 +58,7 @@ const creepy = [
   "Let me in.",
 ];
 
-/** Creepy lines that "know" things. Only local, harmless facts: never files, window titles, browsing or network. */
+/** Creepy lines that "know" things (what he finds snooping around is in snoopKnowledge). */
 function knowledge(ctx: Context): string[] {
   const lines = ["It's {day}. I know what you do on {day}s. tee hee"];
   if ((ctx.uptime ?? 0) >= 3600)
@@ -90,6 +92,59 @@ function pcKnowledge(ctx: Context): string[] {
   if (pc.cpu_load >= 40) lines.push("Your CPU is at {cpuLoad}%. What are you hiding, {user}?");
   if (pc.top_app) lines.push("{topApp} is eating {topAppGb} of your memory. I'm watching it.");
   if (pc.battery && !pc.battery[1]) lines.push("Battery at {battery}%. When it dies, I'll still be here.");
+  return lines;
+}
+
+const DAY_S = 24 * 3600;
+
+function any<T>(list: T[]): T {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+/** The game played most recently, if that was in the last few days. */
+function recentGame(ctx: Context) {
+  const g = ctx.snoop?.games[0];
+  return g && g.last_played > ctx.now.getTime() / 1000 - 3 * DAY_S ? g : null;
+}
+
+function hours(h: number): string {
+  return h < 1 ? "less than an hour" : `${Math.round(h)} hour${Math.round(h) === 1 ? "" : "s"}`;
+}
+
+/** Friendly remarks about what he found snooping around. The found names go straight into the line. */
+function snoopFacts(ctx: Context): string[] {
+  const s = ctx.snoop;
+  if (!s) return [];
+  const lines: string[] = [];
+  if (s.apps.length >= 10) lines.push(`You have ${s.apps.length} apps installed. I'm the best one, right?`, `You have ${any(s.apps)}? Show me sometime!`);
+  const recent = recentGame(ctx);
+  if (recent) lines.push(`${recent.name} again? ${hours(recent.hours)} in... can I have a turn?`);
+  const most = [...s.games].sort((a, b) => b.hours - a.hours)[0];
+  if (most && most.hours >= 10) lines.push(`${hours(most.hours)} in ${most.name}! That's dedication, {user}.`);
+  const [top, second] = s.sites;
+  if (top && top[1] >= 5) lines.push(`${top[0]} ${top[1]} times today? Must be good.`);
+  if (second) lines.push(`I saw you on ${second[0]}. Anything fun?`);
+  const d = s.downloads;
+  if (d?.recent.some(([ext]) => ext === "exe" || ext === "msi")) lines.push("A new .exe in your Downloads? Living dangerously! tee hee");
+  else if (d?.recent.length) {
+    const [ext, n] = d.recent[0];
+    lines.push(n === 1 ? `You downloaded a ${ext} today. What's in it?` : `You downloaded ${n} ${ext} files today. What's in them?`);
+  }
+  if (d && d.total >= 100) lines.push(`${d.total} files in your Downloads! Ever clean up, {user}?`);
+  return lines;
+}
+
+/** Creepy remarks about what he found snooping around. */
+function snoopKnowledge(ctx: Context): string[] {
+  const s = ctx.snoop;
+  if (!s) return [];
+  const lines: string[] = [];
+  if (s.apps.length) lines.push(`I went through your apps. ${any(s.apps)} is my favourite. tee hee`, `${s.apps.length} apps. I've opened them all while you slept.`);
+  const recent = recentGame(ctx);
+  if (recent) lines.push(`${hours(recent.hours)} of ${recent.name}. You never play with me.`);
+  if (s.sites[0]) lines.push(`${s.sites[0][0]}. ${s.sites[0][1]} times today. I counted.`);
+  if (s.sites.length > 1) lines.push(`I know about ${any(s.sites.slice(1))[0]}, {user}.`);
+  if (s.downloads?.total) lines.push(`${s.downloads.total} files in your Downloads. I looked at every one.`);
   return lines;
 }
 
@@ -206,8 +261,8 @@ let lastPick = "";
 export function randomLine(mood: Mood, ctx: Context): string {
   const pool =
     mood === "friendly"
-      ? [...friendly, ...ctx.skin.lines, ...pcFacts(ctx), ...musicFacts(ctx)]
-      : [...creepy, ...knowledge(ctx), ...pcKnowledge(ctx)];
+      ? [...friendly, ...ctx.skin.lines, ...pcFacts(ctx), ...snoopFacts(ctx), ...musicFacts(ctx)]
+      : [...creepy, ...knowledge(ctx), ...pcKnowledge(ctx), ...snoopKnowledge(ctx)];
   let text = lastPick;
   while (text === lastPick) text = render(pool[Math.floor(Math.random() * pool.length)], ctx);
   lastPick = text;

@@ -9,6 +9,7 @@ import {
   cursorTo,
   discordStatus,
   getPcInfo,
+  getSnoop,
   getScreens,
   getUptime,
   getUsername,
@@ -84,6 +85,7 @@ const ROLL_SPEED = 260; // px/s he spins on the spot while scrolling
 const PET_FRAMES = 10; // the PetPet hand: one pass of its 10 frames
 const PET_FRAME_MS = 30;
 const PC_INFO_EVERY_MS = 60_000;
+const SNOOP_EVERY_MS = 10 * 60_000; // he looks around again this often
 const ROAM_CHANCE = 0.2; // of idle chatter turning into a trip to another screen
 const EXPLORE_CHANCE = 0.3; // of idle chatter turning into a visit to some app's window
 const MUSIC_WINDOW_PULL = 0.7; // while music plays, how often that visit is to the music app
@@ -138,7 +140,7 @@ function count(stat: keyof Stats): void {
   save("stats", JSON.stringify(ctx.stats));
 }
 
-const ctx: Context = { user: "friend", now: new Date(), skin, uptime: null, startedAt: new Date(), stats: loadStats(), pc: null, music: null, place: null };
+const ctx: Context = { user: "friend", now: new Date(), skin, uptime: null, startedAt: new Date(), stats: loadStats(), pc: null, snoop: null, music: null, place: null };
 // Uptime is read once at start and advanced from the clock after that.
 let uptimeAtStart: number | null = null;
 
@@ -2065,6 +2067,31 @@ async function refreshPc(): Promise<void> {
   ctx.pc = (await getPcInfo()) ?? ctx.pc;
 }
 
+/**
+ * Looks around again (installed apps, games, websites, downloads; see snoop.rs).
+ * An app that wasn't there last time: he noticed you installed it.
+ */
+async function refreshSnoop(): Promise<void> {
+  if (!setting("snoop")) return;
+  const found = await getSnoop(setting("snoopSites"));
+  if (!found || !setting("snoop")) return;
+  ctx.snoop = found;
+  let known: string[] | null = null;
+  try {
+    known = JSON.parse(load("knownApps") ?? "null");
+  } catch {
+    /* looked again from scratch */
+  }
+  save("knownApps", JSON.stringify(found.apps));
+  if (!Array.isArray(known)) return; // the first look: everything is new
+  const added = found.apps.filter((a) => !known.includes(a));
+  // A handful at most: lots at once is more likely an app menu that couldn't be read last time.
+  if (added.length && added.length <= 3) {
+    const app = added[Math.floor(Math.random() * added.length)];
+    sayWhenFree(() => (mood === "creepy" ? `You installed ${app}. I saw. tee hee` : `Ooh, you installed ${app}! Can I try it?`), () => setting("snoop"));
+  }
+}
+
 // Changes made in the settings window. Autostart is applied there; the
 // jumpscare setting is read when it's needed.
 onSetting((key, on) => {
@@ -2093,6 +2120,17 @@ onSetting((key, on) => {
     roamOn = on;
     updateBounds();
     say(on ? "Your other screens look fun. tee hee" : "Okay, I'll stay on this screen.");
+  } else if (key === "snoop") {
+    if (on) void refreshSnoop();
+    else {
+      ctx.snoop = null;
+      save("knownApps", ""); // forgets your app list too
+    }
+    say(on ? "Ooh, let me have a look around... tee hee" : "Okay, okay. I'll stop snooping.");
+  } else if (key === "snoopSites") {
+    if (on) void refreshSnoop();
+    else if (ctx.snoop) ctx.snoop = { ...ctx.snoop, sites: [] };
+    say(on ? "Ooh, where have you been today? tee hee" : "Fine, your websites are your business.");
   } else if (key === "pester") {
     pesterOn = on;
     say(on ? "I'll come find you if you ignore me. tee hee" : "Fine. I'll leave your cursor alone.");
@@ -2160,6 +2198,8 @@ async function start(): Promise<void> {
   window.setInterval(() => void refreshScreens(), 30_000); // screens plugged in or out
   void refreshPc();
   window.setInterval(() => void refreshPc(), PC_INFO_EVERY_MS);
+  void refreshSnoop();
+  window.setInterval(() => void refreshSnoop(), SNOOP_EVERY_MS);
   window.setTimeout(checkForUpdate, UPDATE_FIRST_CHECK_MS);
   // Test builds only (VITE_VERITY_PROBE=1 bun run build): his state, readable over the webview's devtools protocol.
   if (import.meta.env.VITE_VERITY_PROBE === "1") {
@@ -2220,6 +2260,16 @@ async function start(): Promise<void> {
       dance: () => dance(),
       mic: toggleMic,
       singalong: () => singAlong(),
+      snoop: () => {
+        const now = Date.now() / 1000;
+        ctx.snoop = {
+          apps: ["Blender", "Discord", "Firefox", "GIMP", "Krita", "OBS Studio", "Spotify", "Steam", "VLC", "Visual Studio Code"],
+          games: [{ name: "Stardew Valley", hours: 86.3, last_played: now - 3600 }, { name: "Factorio", hours: 131.8, last_played: now - 30 * 86400 }],
+          sites: [["youtube.com", 42], ["github.com", 17], ["reddit.com", 9]],
+          downloads: { total: 120, recent: [["exe", 1], ["zip", 2]] },
+        };
+        say(randomLine(mood, ctx));
+      },
       pc: () => {
         ctx.pc = { os: "Windows 11 Pro", cpu: "AMD Ryzen 7 9700X", cores: 16, cpu_load: 57, ram_used_gb: 9.4, ram_total_gb: 32, top_app: ["Chrome", 3.2], battery: [18, false] };
         say(randomLine(mood, ctx));

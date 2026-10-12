@@ -18,11 +18,15 @@ export function save(key: string, value: string): void {
   }
 }
 
-/** On/off settings from the settings window. All default to on. */
-export type Setting = "sound" | "pester" | "autostart" | "jumpscare" | "discord" | "music" | "lyrics" | "screens" | "windows";
+/** On/off settings from the settings window. All default to on, except those in DEFAULT_OFF. */
+export type Setting = "sound" | "pester" | "autostart" | "jumpscare" | "discord" | "music" | "lyrics" | "screens" | "windows" | "snoop" | "snoopSites";
+
+/** Off until you turn them on: reading your browser history is your call. */
+const DEFAULT_OFF: readonly Setting[] = ["snoopSites"];
 
 export function setting(key: Setting): boolean {
-  return load(key) !== "0";
+  const saved = load(key);
+  return saved === null ? !DEFAULT_OFF.includes(key) : saved !== "0";
 }
 
 export function saveSetting(key: Setting, on: boolean): void {

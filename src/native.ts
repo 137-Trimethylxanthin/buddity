@@ -149,6 +149,23 @@ export async function getPcInfo(): Promise<PcInfo | null> {
   return inTauri ? invoke<PcInfo>("pc_info").catch(() => null) : null;
 }
 
+/** What he's found snooping around (see src-tauri/src/snoop.rs). */
+export interface Snoop {
+  /** Installed apps' names. */
+  apps: string[];
+  /** Steam games, the most recently played first; last_played in unix seconds (0: never). */
+  games: { name: string; hours: number; last_played: number }[];
+  /** Websites visited in the last day and how often, the most visited first. */
+  sites: [string, number][];
+  /** Files in Downloads, and the types of those added in the last day (most first). */
+  downloads: { total: number; recent: [string, number][] } | null;
+}
+
+/** Websites only if `sites` (the "Websites" switch). */
+export async function getSnoop(sites: boolean): Promise<Snoop | null> {
+  return inTauri ? invoke<Snoop>("snoop", { sites }).catch(() => null) : null;
+}
+
 /** The song's tempo from deezer.com, if it's known there. */
 export async function songBpm(t: Track): Promise<number | null> {
   if (!inTauri) return null;

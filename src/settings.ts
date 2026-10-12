@@ -189,11 +189,15 @@ const box = (key: Setting) => document.querySelector<HTMLInputElement>(`input[da
 // The jumpscare switch stays a secret until he has jumpscared you once.
 if (load("jumpscareSeen") === "1") box("jumpscare").closest("label")!.hidden = false;
 
-// Sing along only works with Music on, so it's greyed out while Music is off.
+// Sub-switches only work with their main switch on, so they're greyed out while it's off.
+function showUsable(sub: Setting, main: Setting): void {
+  const input = box(sub);
+  input.disabled = !box(main).checked;
+  input.closest("label")!.classList.toggle("off", input.disabled);
+}
+
 function showLyricsUsable(): void {
-  const lyrics = box("lyrics");
-  lyrics.disabled = !box("music").checked;
-  lyrics.closest("label")!.classList.toggle("off", lyrics.disabled);
+  showUsable("lyrics", "music");
 }
 
 for (const input of document.querySelectorAll<HTMLInputElement>("input[data-key]")) {
@@ -211,9 +215,11 @@ for (const input of document.querySelectorAll<HTMLInputElement>("input[data-key]
     saveSetting(key, input.checked);
     sendSetting(key, input.checked);
     if (key === "music") showLyricsUsable();
+    if (key === "snoop") showUsable("snoopSites", "snoop");
   });
 }
 showLyricsUsable();
+showUsable("snoopSites", "snoop");
 
 // How often he talks on his own: a segmented choice, applied right away.
 const chat = chattiness();

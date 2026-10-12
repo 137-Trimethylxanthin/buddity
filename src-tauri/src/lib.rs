@@ -2,6 +2,7 @@ mod appwindows;
 mod discord;
 mod music;
 mod pcinfo;
+mod snoop;
 mod tempo;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -196,6 +197,12 @@ fn cursor_to(window: WebviewWindow, input: tauri::State<Input>, x: f64, y: f64) 
 #[tauri::command]
 fn discord_status(discord: tauri::State<discord::Discord>, status: Option<discord::Status>) {
     discord.set(status);
+}
+
+/// What he's found snooping around (see snoop.rs). Copies and reads files, so off the main thread.
+#[tauri::command]
+async fn snoop(sites: bool) -> Result<snoop::Snoop, String> {
+    tauri::async_runtime::spawn_blocking(move || snoop::snoop(sites)).await.map_err(|e| e.to_string())
 }
 
 /// Facts about the computer (see pcinfo.rs). Reading processes takes a moment, so off the main thread.
@@ -651,7 +658,7 @@ pub fn run() {
         .manage(Input::spawn())
         .manage(discord::Discord::spawn())
         .manage(pcinfo::Pc::new())
-        .invoke_handler(tauri::generate_handler![set_hit_regions, get_username, get_uptime, cursor_to, discord_status, open_settings, scroll_active, pc_info, set_music, song_bpm, screens, move_to_screen, set_app_windows, app_windows_fast])
+        .invoke_handler(tauri::generate_handler![set_hit_regions, get_username, get_uptime, cursor_to, discord_status, open_settings, scroll_active, pc_info, snoop, set_music, song_bpm, screens, move_to_screen, set_app_windows, app_windows_fast])
         .setup(|app| {
             build_tray(app)?;
             if let Some(win) = app.get_webview_window("main") {

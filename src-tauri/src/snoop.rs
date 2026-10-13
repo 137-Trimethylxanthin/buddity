@@ -40,7 +40,7 @@ struct Downloads {
     recent: Vec<(String, u32)>,
 }
 
-/// Everything he looks at; the websites only if `sites` (they have their own switch, off unless turned on).
+/// Everything he looks at; the websites only if `sites` (they have their own switch).
 pub fn snoop(sites: bool) -> Snoop {
     remove_leftover_copies();
     let Some(home) = home() else { return Snoop::default() };
